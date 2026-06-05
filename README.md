@@ -1,6 +1,6 @@
-# meetbowl-sst
+# meetbowl-stt
 
-Meetbowl SST API server.
+Meetbowl STT API server.
 
 ## Local setup
 
