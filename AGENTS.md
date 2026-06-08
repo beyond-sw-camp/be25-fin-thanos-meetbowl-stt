@@ -16,7 +16,6 @@
 ../docs/conventions.md
 ../docs/event-contract.md
 ../docs/communication-decision.md
-../docs/requirements-trace.md
 docs/architecture.md
 docs/conventions.md
 docs/api-spec.md
