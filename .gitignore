@@ -25,6 +25,7 @@ replay_pid*
 
 # Node
 node_modules/
+dist/
 .env
 .env.*
 !.env.example
