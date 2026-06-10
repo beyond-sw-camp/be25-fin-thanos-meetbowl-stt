@@ -184,7 +184,7 @@ eventType:
 
 ```text
 transcript.final.created
-meeting.feedback.requested
+meeting.feedback.segment.created
 ```
 
 ---
@@ -196,7 +196,7 @@ meeting.feedback.requested
 ```text
 transcript.final.created
 recording.completed
-meeting.feedback.requested
+meeting.feedback.segment.created
 ```
 
 이 외 이벤트는 루트 `docs/event-contract.md`에 정의된 경우에만 추가한다.
@@ -232,6 +232,9 @@ Audio Frame
 ↓
 STT Provider
 ```
+
+Room 전체 audio mix를 사용하지 않는다. participant audio track마다 독립 pipeline을
+생성하고 한국어 target과 영어 target Translation session에 동일 audio frame을 전달한다.
 
 ---
 
@@ -269,11 +272,17 @@ meetbowl-ai
 
 Redis Stream을 장기 저장소로 사용하지 않는다.
 
+Finalized segment는 한 건씩 `meeting.feedback.segment.created`로 발행한다.
+AI 피드백용 rolling window는 `meetbowl-ai`가 구성한다.
+
 ---
 
 # 10. 메모리 규칙
 
 오디오 파일 전체를 메모리에 적재하지 않는다.
+
+회의 전체 원문 문자열, finalized segment 전체 목록, AI 피드백용 transcript window도
+메모리에 보관하지 않는다.
 
 금지:
 
