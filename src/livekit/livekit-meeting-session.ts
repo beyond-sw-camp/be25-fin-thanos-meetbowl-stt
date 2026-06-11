@@ -15,7 +15,10 @@ import type {
   RedisFeedbackStream
 } from "../events/redis-feedback-stream.js";
 import type { RabbitMqTranscriptPublisher } from "../events/rabbitmq-transcript-publisher.js";
-import type { TranslationProvider } from "../providers/translation-provider.js";
+import type {
+  TranscriptionProvider,
+  TranslationProvider
+} from "../providers/translation-provider.js";
 import type { FinalizationReason } from "../transcript/transcript-types.js";
 import { LiveKitCaptionPublisher } from "./livekit-caption-publisher.js";
 import {
@@ -32,6 +35,7 @@ export interface LiveKitMeetingSessionOptions {
   rabbitPublisher: RabbitMqTranscriptPublisher;
   feedbackStream: RedisFeedbackStream;
   translationProvider: TranslationProvider;
+  transcriptionProvider: TranscriptionProvider;
   logger: PipelineLogger;
 }
 
@@ -49,7 +53,14 @@ export class LiveKitMeetingSession {
       return;
     }
     this.startedAtMs = Date.now();
-    this.captionPublisher = new LiveKitCaptionPublisher(this.room);
+    this.captionPublisher = new LiveKitCaptionPublisher(
+      this.room,
+      this.options.logger,
+      {
+        meetingId: this.options.meetingId,
+        sessionId: this.options.sessionId
+      }
+    );
     this.room
       .on(
         RoomEvent.TrackSubscribed,
@@ -151,7 +162,9 @@ export class LiveKitMeetingSession {
       silenceMs: this.options.config.VAD_SILENCE_MS,
       noDeltaTimeoutMs: this.options.config.SEGMENT_NO_DELTA_TIMEOUT_MS,
       translationGraceMs: this.options.config.TRANSLATION_GRACE_MS,
+      enableTranslation: this.options.config.ENABLE_TRANSLATION,
       maxSegmentDurationMs: this.options.config.MAX_SEGMENT_DURATION_MS,
+      transcriptionProvider: this.options.transcriptionProvider,
       logger: this.options.logger
     });
     this.pipelines.set(key, pipeline);

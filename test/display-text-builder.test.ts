@@ -12,6 +12,7 @@ function segment(
     meetingId: "meeting-id",
     sessionId: "session-id",
     startedAtMs: 0,
+    sourceTranscript: "",
     sourceCandidateKo: "",
     sourceCandidateEn: "",
     koTargetOutput: "",
@@ -53,6 +54,26 @@ test("uses English source as enText and Korean translation as koText", () => {
       sourceText: "I have the deployment checklist.",
       koText: "배포 체크리스트를 가지고 있습니다.",
       enText: "I have the deployment checklist."
+    }
+  );
+});
+
+test("prefers transcription source over translation-derived candidates", () => {
+  assert.deepEqual(
+    buildDisplayTexts(
+      segment({
+        sourceTranscript: "회의는 내일 오전 10시에 시작합니다.",
+        sourceCandidateKo: "회의는 내일 오전 10시에 시작합니다.",
+        sourceCandidateEn: "The meeting starts at 10 a.m. tomorrow.",
+        koTargetOutput: "회의는 내일 오전 10시에 시작합니다.",
+        enTargetOutput: "The meeting starts at 10 a.m. tomorrow."
+      })
+    ),
+    {
+      sourceLanguage: "ko",
+      sourceText: "회의는 내일 오전 10시에 시작합니다.",
+      koText: "회의는 내일 오전 10시에 시작합니다.",
+      enText: "The meeting starts at 10 a.m. tomorrow."
     }
   );
 });

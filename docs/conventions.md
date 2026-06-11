@@ -234,7 +234,8 @@ STT Provider
 ```
 
 Room 전체 audio mix를 사용하지 않는다. participant audio track마다 독립 pipeline을
-생성하고 한국어 target과 영어 target Translation session에 동일 audio frame을 전달한다.
+생성하고 transcription session을 우선 전달한다. 번역 session은 보조 출력이 필요할 때만
+연결한다.
 
 ---
 
@@ -365,7 +366,8 @@ STT_CAPTION_LANGUAGE_UNSUPPORTED
 
 실시간 처리 성능을 우선한다.
 
-실시간 STT 및 번역 자막은 회의 흐름을 크게 방해하지 않는 수준의 지연 시간으로 제공한다.
+실시간 STT 자막은 회의 흐름을 크게 방해하지 않는 수준의 지연 시간으로 제공하고,
+번역 자막은 보조 기능으로서 지연이 생겨도 원문 자막 표시를 막지 않는다.
 
 ---
 

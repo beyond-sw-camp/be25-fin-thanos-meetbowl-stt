@@ -18,3 +18,29 @@ export interface TranslationProvider {
     handlers: TranslationSessionHandlers
   ): TranslationSession;
 }
+
+export type TranscriptionDelay =
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
+
+export interface TranscriptionSessionHandlers {
+  onTranscriptDelta(delta: string): void;
+  onTranscriptCompleted(transcript: string): void;
+  onError(error: Error): void;
+}
+
+export interface TranscriptionSession {
+  connect(): Promise<void>;
+  appendAudio(samples: Int16Array): void;
+  commitAudio(): void;
+  close(): Promise<void>;
+}
+
+export interface TranscriptionProvider {
+  createSession(
+    handlers: TranscriptionSessionHandlers
+  ): TranscriptionSession;
+}

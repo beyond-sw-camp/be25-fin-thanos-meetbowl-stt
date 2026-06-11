@@ -21,6 +21,11 @@ export interface TranscriptSegment {
   sourceText: string;
   koText: string;
   enText: string;
+  sourceTranscript?: string;
+  sourceCandidateKo?: string;
+  sourceCandidateEn?: string;
+  koTargetOutput?: string;
+  enTargetOutput?: string;
   status: SegmentStatus;
 }
 
@@ -30,6 +35,7 @@ export interface ActiveTranscriptSegment {
   sessionId: string;
   startedAtMs: number;
   endedAtMs?: number;
+  sourceTranscript: string;
   sourceCandidateKo: string;
   sourceCandidateEn: string;
   koTargetOutput: string;
@@ -40,7 +46,7 @@ export interface ActiveTranscriptSegment {
 
 export interface FinalTranscriptPayload
   extends Omit<TranscriptSegment, "status"> {
-  provider: "openai-realtime-translation";
+  provider: "openai-realtime-stt";
   finalizationReason: FinalizationReason;
   idempotencyKey: string;
 }

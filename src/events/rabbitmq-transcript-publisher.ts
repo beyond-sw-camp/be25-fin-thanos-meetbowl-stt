@@ -45,7 +45,7 @@ export class RabbitMqTranscriptPublisher implements FinalSegmentPublisher {
       sourceText: segment.sourceText,
       koText: segment.koText,
       enText: segment.enText,
-      provider: "openai-realtime-translation",
+      provider: "openai-realtime-stt",
       finalizationReason: reason,
       idempotencyKey: `${segment.meetingId}:${segment.segmentId}`
     };

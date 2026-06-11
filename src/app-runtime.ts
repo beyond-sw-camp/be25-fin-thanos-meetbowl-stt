@@ -4,6 +4,7 @@ import { dispose } from "@livekit/rtc-node";
 import type { AppConfig } from "./config/env.js";
 import { RabbitMqTranscriptPublisher } from "./events/rabbitmq-transcript-publisher.js";
 import { RedisFeedbackStream } from "./events/redis-feedback-stream.js";
+import { OpenAiRealtimeTranscriptionProvider } from "./providers/openai-realtime-transcription-provider.js";
 import { OpenAiRealtimeTranslationProvider } from "./providers/openai-realtime-translation-provider.js";
 import { SttSessionService } from "./sessions/stt-session-service.js";
 
@@ -33,6 +34,11 @@ export class AppRuntime {
       translationProvider: new OpenAiRealtimeTranslationProvider({
         apiKey: config.OPENAI_API_KEY,
         model: config.OPENAI_REALTIME_TRANSLATION_MODEL
+      }),
+      transcriptionProvider: new OpenAiRealtimeTranscriptionProvider({
+        apiKey: config.OPENAI_API_KEY,
+        model: config.OPENAI_REALTIME_TRANSCRIPTION_MODEL,
+        delay: config.OPENAI_REALTIME_TRANSCRIPTION_DELAY
       }),
       logger
     });

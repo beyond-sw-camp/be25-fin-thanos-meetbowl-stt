@@ -12,7 +12,7 @@
 - Final Transcript 생성
 - 실시간 자막 전달
 - AI 실시간 피드백 결과 전달
-- 실시간 번역 자막 전달
+- 실시간 STT 자막과 보조 번역 자막 전달
 - KOR/ENG 자막 표시 언어 전환
 - 회의 종료 후 Final Transcript 전달
 - 녹음 파일 저장 요청 또는 녹음 메타데이터 전달
@@ -158,7 +158,7 @@ STT 서버는 finalized segment 전체 목록을 보관하지 않는다. REST AP
     "sourceText": "오늘 회의 안건은 배포 일정입니다.",
     "koText": "오늘 회의 안건은 배포 일정입니다.",
     "enText": "Today's agenda is the deployment schedule.",
-    "provider": "openai-realtime-translation",
+    "provider": "openai-realtime-stt",
     "finalizationReason": "VAD_SILENCE",
     "idempotencyKey": "meetingId:segmentId"
   }
@@ -171,8 +171,8 @@ STT 서버는 finalized segment 전체 목록을 보관하지 않는다. REST AP
 
 실시간 자막 화면 전달은 LiveKit DataChannel을 기본으로 한다. AI 실시간 피드백도 `meetbowl-stt`가 LiveKit DataChannel로 전달한다.
 
-각 segment의 `koText`와 `enText`를 모두 생성한다. 표시 탭 선택은 프론트 화면 상태이며
-STT session 상태로 저장하지 않는다.
+각 segment의 `sourceText`를 우선 생성하고, `koText`와 `enText`는 보조 번역 출력으로
+생성한다. 표시 탭 선택은 프론트 화면 상태이며 STT session 상태로 저장하지 않는다.
 
 ### Caption Event
 

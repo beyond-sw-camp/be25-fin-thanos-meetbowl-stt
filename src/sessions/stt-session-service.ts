@@ -5,7 +5,10 @@ import type { RedisFeedbackStream } from "../events/redis-feedback-stream.js";
 import type { RabbitMqTranscriptPublisher } from "../events/rabbitmq-transcript-publisher.js";
 import { LiveKitMeetingSession } from "../livekit/livekit-meeting-session.js";
 import type { PipelineLogger } from "../livekit/participant-audio-pipeline.js";
-import type { TranslationProvider } from "../providers/translation-provider.js";
+import type {
+  TranscriptionProvider,
+  TranslationProvider
+} from "../providers/translation-provider.js";
 
 export type SttSessionStatus =
   | "CREATED"
@@ -43,6 +46,7 @@ export interface SttSessionServiceDependencies {
   rabbitPublisher: RabbitMqTranscriptPublisher;
   feedbackStream: RedisFeedbackStream;
   translationProvider: TranslationProvider;
+  transcriptionProvider: TranscriptionProvider;
   logger: PipelineLogger;
 }
 

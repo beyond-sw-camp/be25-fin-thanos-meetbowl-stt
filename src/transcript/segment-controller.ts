@@ -25,6 +25,7 @@ export interface SegmentControllerOptions {
 }
 
 type TranscriptChannel =
+  | "sourceTranscript"
   | "sourceCandidateKo"
   | "sourceCandidateEn"
   | "koTargetOutput"
@@ -50,6 +51,7 @@ export class SegmentController {
       meetingId: this.options.meetingId,
       sessionId: this.options.sessionId,
       startedAtMs: Math.max(0, nowMs - this.options.meetingStartedAtMs),
+      sourceTranscript: "",
       sourceCandidateKo: "",
       sourceCandidateEn: "",
       koTargetOutput: "",
@@ -71,6 +73,27 @@ export class SegmentController {
     );
     this.active.speechStoppedAtMs = nowMs;
     this.scheduleGraceFinalization("VAD_SILENCE");
+  }
+
+  replaceSourceTranscript(transcript: string, nowMs = Date.now()): void {
+    const normalized = transcript.trim();
+    if (!normalized) {
+      return;
+    }
+    if (!this.active) {
+      this.startSpeech(nowMs);
+    }
+    const active = this.active;
+    if (!active) {
+      return;
+    }
+    active.sourceTranscript = normalized;
+    active.lastDeltaAtMs = nowMs;
+    this.scheduleNoDeltaFinalization();
+    if (active.speechStoppedAtMs !== undefined) {
+      this.scheduleGraceFinalization("VAD_SILENCE");
+    }
+    void this.publishStreaming();
   }
 
   appendDelta(
@@ -176,6 +199,11 @@ export class SegmentController {
       sourceText: display.sourceText,
       koText: display.koText,
       enText: display.enText,
+      sourceTranscript: active.sourceTranscript,
+      sourceCandidateKo: active.sourceCandidateKo,
+      sourceCandidateEn: active.sourceCandidateEn,
+      koTargetOutput: active.koTargetOutput,
+      enTargetOutput: active.enTargetOutput,
       status
     };
   }

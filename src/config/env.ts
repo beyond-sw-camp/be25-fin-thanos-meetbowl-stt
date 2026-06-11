@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 const positiveInteger = z.coerce.number().int().positive();
+const booleanString = z
+  .enum(["true", "false"])
+  .default("false")
+  .transform((value) => value === "true");
 
 const envSchema = z.object({
   HOST: z.string().default("0.0.0.0"),
@@ -8,6 +12,11 @@ const envSchema = z.object({
   INTERNAL_TOKEN: z.string().min(16),
   OPENAI_API_KEY: z.string().min(1),
   OPENAI_REALTIME_TRANSLATION_MODEL: z.string().default("gpt-realtime-translate"),
+  OPENAI_REALTIME_TRANSCRIPTION_MODEL: z.string().default("gpt-realtime-whisper"),
+  OPENAI_REALTIME_TRANSCRIPTION_DELAY: z
+    .enum(["minimal", "low", "medium", "high", "xhigh"])
+    .default("low"),
+  ENABLE_TRANSLATION: booleanString,
   LIVEKIT_URL: z.string().url(),
   LIVEKIT_API_KEY: z.string().min(1),
   LIVEKIT_API_SECRET: z.string().min(1),

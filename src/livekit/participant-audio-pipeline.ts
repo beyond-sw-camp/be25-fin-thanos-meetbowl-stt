@@ -3,7 +3,10 @@ import {
   type RemoteAudioTrack
 } from "@livekit/rtc-node";
 
-import type { TranslationProvider } from "../providers/translation-provider.js";
+import type {
+  TranscriptionProvider,
+  TranslationProvider
+} from "../providers/translation-provider.js";
 import { EnergyVad } from "../transcript/energy-vad.js";
 import type {
   CaptionPublisher,
@@ -28,6 +31,8 @@ export interface ParticipantAudioPipelineOptions {
   meetingStartedAtMs: number;
   nextSequence: () => number;
   translationProvider: TranslationProvider;
+  transcriptionProvider: TranscriptionProvider;
+  enableTranslation: boolean;
   captionPublisher: CaptionPublisher;
   finalSegmentPublisher: FinalSegmentPublisher;
   rmsThreshold: number;
@@ -44,6 +49,13 @@ export class ParticipantAudioPipeline {
   private readonly segmentController: SegmentController;
   private readonly koSession;
   private readonly enSession;
+  private readonly transcriptionSession;
+  private translationEnabled = false;
+  private transcriptionEnabled = false;
+  private transcriptionAudioFrames = 0;
+  private translationAudioFrames = 0;
+  private sawTranscriptDelta = false;
+  private sawTranscriptCompleted = false;
   private runningTask?: Promise<void>;
 
   constructor(private readonly options: ParticipantAudioPipelineOptions) {
@@ -64,37 +76,109 @@ export class ParticipantAudioPipeline {
       correlationId: options.correlationId
     });
     this.koSession = options.translationProvider.createSession("ko", {
+      // 한국어 표시용 세션의 원문 후보를 누적한다.
       onSourceDelta: (delta) =>
         this.segmentController.appendDelta("sourceCandidateKo", delta),
+      // 영어 음성을 한국어 화면 문장으로 바꿔 쌓는다.
       onTranslationDelta: (delta) =>
         this.segmentController.appendDelta("koTargetOutput", delta),
       onError: (error) => this.handleProviderError("ko", error)
     });
     this.enSession = options.translationProvider.createSession("en", {
+      // 영어 표시용 세션의 원문 후보를 누적한다.
       onSourceDelta: (delta) =>
         this.segmentController.appendDelta("sourceCandidateEn", delta),
+      // 한국어 음성을 영어 화면 문장으로 바꿔 쌓는다.
       onTranslationDelta: (delta) =>
         this.segmentController.appendDelta("enTargetOutput", delta),
       onError: (error) => this.handleProviderError("en", error)
+    });
+    this.transcriptionSession = options.transcriptionProvider.createSession({
+      // transcription 전용 세션의 원문 delta를 canonical source로 누적한다.
+      onTranscriptDelta: (delta) => {
+        this.sawTranscriptDelta = true;
+        this.segmentController.appendDelta("sourceTranscript", delta);
+      },
+      // completed transcript가 오면 최종 원문으로 덮어쓴다.
+      onTranscriptCompleted: (transcript) => {
+        this.sawTranscriptCompleted = true;
+        this.segmentController.replaceSourceTranscript(transcript);
+      },
+      onError: (error) => this.handleProviderError("source", error)
     });
   }
 
   async start(): Promise<void> {
     try {
-      await Promise.all([this.koSession.connect(), this.enSession.connect()]);
+      try {
+        await this.transcriptionSession.connect();
+        this.transcriptionEnabled = true;
+        this.options.logger.info(
+          {
+            meetingId: this.options.meetingId,
+            sessionId: this.options.sessionId,
+            trackSid: this.options.trackSid
+          },
+          "source transcription session connected"
+        );
+      } catch (error) {
+        this.transcriptionEnabled = false;
+        this.options.logger.warn(
+          {
+            meetingId: this.options.meetingId,
+            sessionId: this.options.sessionId,
+            trackSid: this.options.trackSid,
+            error: error instanceof Error ? error.message : String(error)
+          },
+          "source transcription provider unavailable, continuing without source transcript"
+        );
+      }
+
+      const shouldEnableTranslation =
+        this.options.enableTranslation || !this.transcriptionEnabled;
+      if (shouldEnableTranslation) {
+        try {
+          await Promise.all([this.koSession.connect(), this.enSession.connect()]);
+          this.translationEnabled = true;
+        } catch (error) {
+          this.translationEnabled = false;
+          this.options.logger.warn(
+            {
+              meetingId: this.options.meetingId,
+              sessionId: this.options.sessionId,
+              trackSid: this.options.trackSid,
+              error: error instanceof Error ? error.message : String(error)
+            },
+            "translation provider unavailable, continuing without translation output"
+          );
+        }
+      } else {
+        this.translationEnabled = false;
+        this.options.logger.info(
+          {
+            meetingId: this.options.meetingId,
+            sessionId: this.options.sessionId,
+            trackSid: this.options.trackSid
+          },
+          "translation disabled, running in transcription-only mode"
+        );
+      }
       this.runningTask = this.readAudio();
       this.options.logger.info(
         {
           meetingId: this.options.meetingId,
           sessionId: this.options.sessionId,
-          trackSid: this.options.trackSid
+          trackSid: this.options.trackSid,
+          transcriptionEnabled: this.transcriptionEnabled,
+          translationEnabled: this.translationEnabled
         },
         "participant audio pipeline started"
       );
     } catch (error) {
       await Promise.allSettled([
         this.koSession.close(),
-        this.enSession.close()
+        this.enSession.close(),
+        this.transcriptionSession.close()
       ]);
       throw error;
     }
@@ -102,14 +186,27 @@ export class ParticipantAudioPipeline {
 
   async stop(reason: FinalizationReason): Promise<void> {
     this.abortController.abort();
-    await Promise.allSettled([this.koSession.close(), this.enSession.close()]);
+    if (this.transcriptionEnabled) {
+      this.transcriptionSession.commitAudio();
+    }
+    await Promise.allSettled([
+      this.koSession.close(),
+      this.enSession.close(),
+      this.transcriptionSession.close()
+    ]);
     await this.runningTask;
     await this.segmentController.flush(reason);
     this.options.logger.info(
       {
         meetingId: this.options.meetingId,
         sessionId: this.options.sessionId,
-        trackSid: this.options.trackSid
+        trackSid: this.options.trackSid,
+        transcriptionEnabled: this.transcriptionEnabled,
+        translationEnabled: this.translationEnabled,
+        transcriptionAudioFrames: this.transcriptionAudioFrames,
+        translationAudioFrames: this.translationAudioFrames,
+        sawTranscriptDelta: this.sawTranscriptDelta,
+        sawTranscriptCompleted: this.sawTranscriptCompleted
       },
       "participant audio pipeline stopped"
     );
@@ -140,13 +237,44 @@ export class ParticipantAudioPipeline {
           break;
         }
         const nowMs = Date.now();
+        // transcription을 우선으로 보내고, translation은 옵션으로 덧붙인다.
         const vad = this.vad.update(value.data, nowMs);
         if (vad.speechStarted) {
           this.segmentController.startSpeech(nowMs);
         }
-        this.koSession.appendAudio(value.data);
-        this.enSession.appendAudio(value.data);
+        if (this.transcriptionEnabled) {
+          if (this.transcriptionAudioFrames === 0) {
+            this.options.logger.info(
+              {
+                meetingId: this.options.meetingId,
+                sessionId: this.options.sessionId,
+                trackSid: this.options.trackSid
+              },
+              "first audio frame forwarded to source transcription"
+            );
+          }
+          this.transcriptionAudioFrames += 1;
+          this.transcriptionSession.appendAudio(value.data);
+        }
+        if (this.translationEnabled) {
+          if (this.translationAudioFrames === 0) {
+            this.options.logger.info(
+              {
+                meetingId: this.options.meetingId,
+                sessionId: this.options.sessionId,
+                trackSid: this.options.trackSid
+              },
+              "first audio frame forwarded to translation"
+            );
+          }
+          this.translationAudioFrames += 1;
+          this.koSession.appendAudio(value.data);
+          this.enSession.appendAudio(value.data);
+        }
         if (vad.speechStopped) {
+          if (this.transcriptionEnabled) {
+            this.transcriptionSession.commitAudio();
+          }
           this.segmentController.stopSpeech(nowMs);
         }
       }
@@ -169,7 +297,7 @@ export class ParticipantAudioPipeline {
   }
 
   private handleProviderError(
-    targetLanguage: "ko" | "en",
+    targetLanguage: "ko" | "en" | "source",
     error: Error
   ): void {
     this.options.logger.warn(
@@ -180,7 +308,7 @@ export class ParticipantAudioPipeline {
         targetLanguage,
         error: error.message
       },
-      "translation provider degraded"
+      "stt provider degraded"
     );
   }
 }
