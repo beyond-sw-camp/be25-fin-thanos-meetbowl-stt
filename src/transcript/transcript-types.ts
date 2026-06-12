@@ -17,6 +17,8 @@ export interface TranscriptSegment {
   sequence: number;
   startedAtMs: number;
   endedAtMs?: number;
+  language: SourceLanguage;
+  text: string;
   sourceLanguage: SourceLanguage;
   sourceText: string;
   koText: string;
@@ -45,8 +47,18 @@ export interface ActiveTranscriptSegment {
 }
 
 export interface FinalTranscriptPayload
-  extends Omit<TranscriptSegment, "status"> {
-  provider: "openai-realtime-stt";
+  extends Pick<
+    TranscriptSegment,
+    | "meetingId"
+    | "sessionId"
+    | "segmentId"
+    | "sequence"
+    | "language"
+    | "text"
+    | "startedAtMs"
+    | "endedAtMs"
+  > {
+  provider: "openai-realtime-transcription";
   finalizationReason: FinalizationReason;
   idempotencyKey: string;
 }

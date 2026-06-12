@@ -29,6 +29,7 @@ export class OpenAiRealtimeTranslationProvider
     targetLanguage: TranslationTargetLanguage,
     handlers: TranslationSessionHandlers
   ): TranslationSession {
+    // 각 target language별로 독립된 websocket session을 만든다.
     return new OpenAiTranslationSession(
       this.options,
       targetLanguage,
@@ -48,6 +49,7 @@ class OpenAiTranslationSession implements TranslationSession {
   ) {}
 
   async connect(): Promise<void> {
+    // translation websocket을 열고 target language를 session.update로 전달한다.
     const url = new URL("wss://api.openai.com/v1/realtime/translations");
     url.searchParams.set("model", this.options.model);
 
@@ -83,6 +85,7 @@ class OpenAiTranslationSession implements TranslationSession {
         session: {
           audio: {
             output: {
+              // targetLanguage는 한국어/영어 전환 output의 기준 언어가 된다.
               language: this.targetLanguage
             }
           }
@@ -95,6 +98,7 @@ class OpenAiTranslationSession implements TranslationSession {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return;
     }
+    // audio frame은 transcription provider와 동일하게 base64 PCM으로 전달한다.
     const audio = Buffer.from(
       samples.buffer,
       samples.byteOffset,
@@ -113,6 +117,7 @@ class OpenAiTranslationSession implements TranslationSession {
     if (!socket || this.closed) {
       return;
     }
+    // session.close를 먼저 보내고 server가 닫힌 뒤 websocket을 종료한다.
     if (socket.readyState !== WebSocket.OPEN) {
       socket.close();
       return;
@@ -144,6 +149,7 @@ class OpenAiTranslationSession implements TranslationSession {
     if (!event) {
       return;
     }
+    // source delta와 translation delta만 상위 pipeline으로 전달한다.
     if (event.type === "session.input_transcript.delta" && event.delta) {
       this.handlers.onSourceDelta(event.delta);
     } else if (

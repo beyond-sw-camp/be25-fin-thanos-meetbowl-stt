@@ -11,7 +11,8 @@
     "probe:transcription": "node --env-file-if-exists=.env scripts/probe-openai-transcription.mjs",
     "probe:realtime-transcription": "node --env-file-if-exists=.env scripts/probe-openai-realtime-transcription.mjs",
     "probe:livekit-caption": "node --env-file-if-exists=.env scripts/probe-livekit-caption.mjs",
-    "session:start:local": "node --env-file-if-exists=.env scripts/start-local-stt-session.mjs"
+    "session:start:local": "node --env-file-if-exists=.env scripts/start-local-stt-session.mjs",
+    "session:stop:local": "node --env-file-if-exists=.env scripts/stop-local-stt-session.mjs"
   },
   "dependencies": {
     "@fastify/websocket": "^11.0.2",

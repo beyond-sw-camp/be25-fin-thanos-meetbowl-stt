@@ -26,6 +26,7 @@ export const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
   app,
   options
 ) => {
+  // health 계열은 runtime이 없어도 항상 살아 있어야 한다.
   app.get("/health", async () => {
     return { status: "ok" };
   });
@@ -49,6 +50,7 @@ export const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
   });
 
   if (!options.runtime) {
+    // runtime이 없으면 관리 API는 비활성화하고 health만 제공한다.
     return;
   }
 
@@ -56,6 +58,7 @@ export const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
     request: { headers: Record<string, unknown> },
     reply: { code(statusCode: number): { send(payload: unknown): unknown } }
   ) => {
+    // 세션 생성/시작/정지는 외부 공개 API가 아니라 내부 제어 API다.
     if (
       request.headers["x-internal-token"] !==
       options.runtime?.config.INTERNAL_TOKEN
@@ -134,6 +137,7 @@ async function handleSessionRequest(
     return validationError(reply, parsed.error);
   }
   try {
+    // 모든 성공 응답은 공통 success envelope로 정리한다.
     return success(await handler(parsed.data.sessionId));
   } catch (error) {
     if (error instanceof SessionNotFoundError) {

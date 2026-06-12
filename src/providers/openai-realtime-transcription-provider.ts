@@ -34,6 +34,7 @@ export class OpenAiRealtimeTranscriptionProvider
   createSession(
     handlers: TranscriptionSessionHandlers
   ): TranscriptionSession {
+    // session 객체는 연결/오디오 append/close를 캡슐화한다.
     return new OpenAiTranscriptionSession(this.options, handlers);
   }
 }
@@ -48,6 +49,7 @@ class OpenAiTranscriptionSession implements TranscriptionSession {
   ) {}
 
   async connect(): Promise<void> {
+    // transcription 전용 realtime websocket을 열고 session.update를 먼저 보낸다.
     const url = new URL("wss://api.openai.com/v1/realtime");
     url.searchParams.set("intent", "transcription");
 
@@ -100,6 +102,7 @@ class OpenAiTranscriptionSession implements TranscriptionSession {
                 rate: 24000
               },
               transcription: {
+                // delay는 provider가 partial delta를 얼마나 빨리 내보낼지 제어한다.
                 model: this.options.model,
                 delay: this.options.delay,
                 ...(this.options.language
@@ -117,6 +120,7 @@ class OpenAiTranscriptionSession implements TranscriptionSession {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return;
     }
+    // PCM frame을 base64로 감싸 OpenAI websocket payload 형식에 맞춘다.
     const audio = Buffer.from(
       samples.buffer,
       samples.byteOffset,
@@ -134,7 +138,7 @@ class OpenAiTranscriptionSession implements TranscriptionSession {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return;
     }
-    // local VAD가 끝난 시점마다 commit해서 turn을 자른다.
+    // local VAD가 끝난 시점마다 commit해서 같은 발화를 다음 turn과 분리한다.
     this.socket.send(
       JSON.stringify({
         type: "input_audio_buffer.commit"
@@ -147,6 +151,7 @@ class OpenAiTranscriptionSession implements TranscriptionSession {
     if (!socket || this.closed) {
       return;
     }
+    // open 상태면 닫힘 이벤트를 기다리고, 이미 닫힌 경우엔 즉시 반환한다.
     if (socket.readyState !== WebSocket.OPEN) {
       socket.close(1000);
       return;
@@ -169,6 +174,7 @@ class OpenAiTranscriptionSession implements TranscriptionSession {
     if (!event) {
       return;
     }
+    // delta/completed/error만 상위 pipeline에 전달하고 나머지는 무시한다.
     debugOpenAiTranscriptionEvent(event);
     if (
       event.type === "conversation.item.input_audio_transcription.delta" &&
@@ -197,6 +203,7 @@ function parseEvent(data: RawData): OpenAiEvent | undefined {
 }
 
 function debugOpenAiTranscriptionEvent(event: OpenAiEvent): void {
+  // 디버그 로그는 관심 이벤트만 골라 짧게 남긴다.
   const interestingTypes = new Set([
     "conversation.item.input_audio_transcription.delta",
     "conversation.item.input_audio_transcription.completed",

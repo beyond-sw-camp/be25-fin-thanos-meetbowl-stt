@@ -7,9 +7,11 @@ const booleanString = z
   .transform((value) => value === "true");
 
 const envSchema = z.object({
+  // 기본 서버 listen 설정과 내부 인증 토큰.
   HOST: z.string().default("0.0.0.0"),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   INTERNAL_TOKEN: z.string().min(16),
+  // OpenAI provider는 transcription과 translation 모델을 분리해서 제어한다.
   OPENAI_API_KEY: z.string().min(1),
   OPENAI_REALTIME_TRANSLATION_MODEL: z.string().default("gpt-realtime-translate"),
   OPENAI_REALTIME_TRANSCRIPTION_MODEL: z.string().default("gpt-realtime-whisper"),
@@ -17,6 +19,7 @@ const envSchema = z.object({
     .enum(["minimal", "low", "medium", "high", "xhigh"])
     .default("low"),
   ENABLE_TRANSLATION: booleanString,
+  // LiveKit / RabbitMQ / Redis는 모두 외부 인프라 연결 정보다.
   LIVEKIT_URL: z.string().url(),
   LIVEKIT_API_KEY: z.string().min(1),
   LIVEKIT_API_SECRET: z.string().min(1),
@@ -29,6 +32,7 @@ const envSchema = z.object({
     .string()
     .default(() => `stt-${process.pid}`),
   REDIS_STREAM_MAX_LENGTH: positiveInteger.default(2000),
+  // VAD와 세그먼트 타이밍은 실시간 자막 품질에 직접 영향을 준다.
   VAD_RMS_THRESHOLD: z.coerce.number().min(0).max(1).default(0.015),
   VAD_SILENCE_MS: positiveInteger.default(700),
   SEGMENT_NO_DELTA_TIMEOUT_MS: positiveInteger.default(1200),

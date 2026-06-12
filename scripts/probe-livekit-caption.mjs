@@ -56,14 +56,18 @@ const captionReceived = new Promise((resolve, reject) => {
       return;
     }
     const event = JSON.parse(new TextDecoder().decode(payload));
-    if (event.eventType !== "caption.updated" || !event.sourceText) {
+    if (
+      event.eventType !== "caption.updated" ||
+      event.status !== "FINALIZED" ||
+      !(event.text || event.sourceText)
+    ) {
       return;
     }
     clearTimeout(timeout);
     resolve({
       participant: participant?.identity,
       status: event.status,
-      sourceText: event.sourceText
+      text: event.text || event.sourceText
     });
   });
 });

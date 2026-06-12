@@ -15,6 +15,7 @@ export function createEventEnvelope<TEventType extends string, TPayload>(
   correlationId: string,
   payload: TPayload
 ): EventEnvelope<TEventType, TPayload> {
+  // 서버 간 이벤트는 모두 같은 envelope로 감싸 추적 필드를 공통화한다.
   return {
     eventId: randomUUID(),
     eventType,

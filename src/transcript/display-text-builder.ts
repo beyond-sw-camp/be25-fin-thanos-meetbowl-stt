@@ -12,6 +12,7 @@ export interface DisplayTexts {
 }
 
 function normalize(text: string): string {
+  // provider가 보낸 공백 흔들림을 화면 표시 전에 정리한다.
   return text.replace(/\s+/g, " ").trim();
 }
 
@@ -23,6 +24,7 @@ function chooseSourceText(
 ): string {
   const transcript = normalize(sourceTranscript);
   if (transcript) {
+    // transcription provider가 준 원문이 있으면 가장 신뢰할 수 있는 표시값으로 본다.
     return transcript;
   }
 
@@ -30,12 +32,15 @@ function chooseSourceText(
   const enCandidate = normalize(sourceCandidateEn);
 
   if (!koCandidate) {
+    // 한국어 후보가 없으면 영어 후보라도 원문으로 사용한다.
     return enCandidate;
   }
   if (!enCandidate) {
+    // 영어 후보가 없으면 한국어 후보를 사용한다.
     return koCandidate;
   }
 
+  // 각 후보의 언어를 대충 판별해 실제 발화 언어에 더 가까운 쪽을 고른다.
   const koLanguage = detectSourceLanguage(koCandidate);
   const enLanguage = detectSourceLanguage(enCandidate);
 
@@ -69,6 +74,7 @@ export function buildDisplayTexts(
   const sourceLanguage = detectSourceLanguage(sourceText);
 
   if (!sourceText) {
+    // 아직 텍스트가 없더라도 UI가 깨지지 않도록 빈 값을 반환한다.
     return {
       sourceLanguage: "unknown",
       sourceText: "",
@@ -78,6 +84,7 @@ export function buildDisplayTexts(
   }
 
   if (sourceLanguage === "ko") {
+    // 한국어 발화는 sourceText를 그대로 보여주고, 영어는 번역 결과를 우선한다.
     return {
       sourceLanguage,
       sourceText,
@@ -86,6 +93,7 @@ export function buildDisplayTexts(
     };
   }
   if (sourceLanguage === "en") {
+    // 영어 발화는 sourceText를 그대로 보여주고, 한국어는 번역 결과를 우선한다.
     return {
       sourceLanguage,
       sourceText,
@@ -94,6 +102,7 @@ export function buildDisplayTexts(
     };
   }
   return {
+    // 언어 판별이 애매하면 원문과 번역 후보를 둘 다 fallback으로 사용한다.
     sourceLanguage,
     sourceText,
     koText: koTargetOutput || sourceText,

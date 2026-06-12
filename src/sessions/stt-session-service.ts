@@ -56,6 +56,7 @@ export class SttSessionService {
   constructor(private readonly dependencies: SttSessionServiceDependencies) {}
 
   create(command: CreateSttSessionCommand): SttSessionView {
+    // 세션은 메모리 상에서만 관리되며, 시작 전에는 runtime이 없다.
     const sessionId = randomUUID();
     const record: SttSessionRecord = {
       sessionId,
@@ -73,6 +74,7 @@ export class SttSessionService {
     if (record.status === "RUNNING") {
       return this.toView(record);
     }
+    // CREATED/STOPPED 상태에서만 새 runtime을 붙인다.
     if (record.status !== "CREATED" && record.status !== "STOPPED") {
       throw new Error(`STT session cannot start from ${record.status}`);
     }
@@ -90,6 +92,7 @@ export class SttSessionService {
       record.status = "RUNNING";
       return this.toView(record);
     } catch (error) {
+      // 시작 실패 시 상태를 FAILED로 기록하고 runtime 참조를 비운다.
       record.status = "FAILED";
       record.runtime = undefined;
       throw error;
@@ -101,6 +104,7 @@ export class SttSessionService {
     if (record.status === "STOPPED") {
       return this.toView(record);
     }
+    // stop은 마지막 flush와 disconnect를 함께 수행하는 종료 경로다.
     record.status = "STOPPING";
     try {
       await record.runtime?.stop("MEETING_ENDED");
@@ -115,6 +119,7 @@ export class SttSessionService {
 
   async flush(sessionId: string): Promise<SttSessionView> {
     const record = this.requireSession(sessionId);
+    // 마지막 발화만 강제 final로 밀어내는 관리용 API다.
     await record.runtime?.flush("MANUAL_FLUSH");
     return this.toView(record);
   }

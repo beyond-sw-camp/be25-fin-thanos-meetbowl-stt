@@ -10,6 +10,7 @@ if (!internalToken) {
   process.exit(1);
 }
 
+// 내부 토큰을 가진 상태에서 session create -> start를 한 번에 수행한다.
 const headers = {
   "content-type": "application/json",
   "x-internal-token": internalToken

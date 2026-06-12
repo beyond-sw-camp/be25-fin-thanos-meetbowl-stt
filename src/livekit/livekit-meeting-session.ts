@@ -53,6 +53,7 @@ export class LiveKitMeetingSession {
       return;
     }
     this.startedAtMs = Date.now();
+    // room 내부에서 생성되는 caption.updated를 다시 room data channel로 내보내는 publisher를 준비한다.
     this.captionPublisher = new LiveKitCaptionPublisher(
       this.room,
       this.options.logger,
@@ -72,6 +73,7 @@ export class LiveKitMeetingSession {
           void this.attachTrack(track, publication, participant);
         }
       )
+      // 트랙이 사라지면 그 트랙에 붙은 pipeline만 정리한다.
       .on(
         RoomEvent.TrackUnsubscribed,
         (
@@ -84,15 +86,18 @@ export class LiveKitMeetingSession {
           }
         }
       )
+      // 참가자가 통째로 나가면 participant 단위로 남은 track pipeline도 함께 종료한다.
       .on(RoomEvent.ParticipantDisconnected, (participant) => {
         void this.detachParticipant(participant.identity);
       });
 
+    // STT 에이전트는 room join/subscribe/publish/data 권한만 가진 토큰으로 입장한다.
     const token = await this.createToken();
     await this.room.connect(this.options.config.LIVEKIT_URL, token, {
       autoSubscribe: true,
       dynacast: false
     });
+    // finalized segment가 나올 때 AI 피드백 입력용 Redis stream에도 바로 전달할 수 있게 consumer를 연다.
     await this.options.feedbackStream.consumeFeedback(
       this.options.meetingId,
       (event) => this.publishFeedback(event)
@@ -100,14 +105,34 @@ export class LiveKitMeetingSession {
   }
 
   async stop(reason: FinalizationReason): Promise<void> {
+    // stop 중 새 feedback이 들어오지 않도록 consumer부터 닫는다.
     this.options.feedbackStream.stopFeedbackConsumer(this.options.meetingId);
+    // 현재 연결된 pipeline을 스냅샷으로 떠서 정리 중 맵 변경에 영향을 받지 않도록 한다.
     const pipelines = [...this.pipelines.values()];
     this.pipelines.clear();
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       pipelines.map((pipeline) => pipeline.stop(reason))
     );
-    await this.room.disconnect();
-    this.startedAtMs = undefined;
+    try {
+      const failures = results.filter(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected"
+      );
+      if (failures.length > 0) {
+        this.options.logger.error(
+          {
+            meetingId: this.options.meetingId,
+            sessionId: this.options.sessionId,
+            failureCount: failures.length
+          },
+          "one or more participant pipelines failed during session stop"
+        );
+      }
+    } finally {
+      // room disconnect 이후에는 새 track 이벤트가 들어오지 않으므로 세션을 초기 상태로 되돌린다.
+      await this.room.disconnect();
+      this.startedAtMs = undefined;
+    }
   }
 
   async flush(reason: FinalizationReason): Promise<void> {
@@ -127,6 +152,7 @@ export class LiveKitMeetingSession {
     publication: RemoteTrackPublication,
     participant: RemoteParticipant
   ): Promise<void> {
+    // 오디오가 아닌 트랙은 STT 파이프라인 대상이 아니다.
     if (!(track instanceof RemoteAudioTrack) || !this.startedAtMs) {
       return;
     }
@@ -134,6 +160,7 @@ export class LiveKitMeetingSession {
     if (!trackSid) {
       return;
     }
+    // 동일 participant + trackSid 조합은 한 번만 attach 한다.
     const key = pipelineKey(participant.identity, trackSid);
     if (this.pipelines.has(key)) {
       return;
@@ -171,6 +198,7 @@ export class LiveKitMeetingSession {
     try {
       await pipeline.start();
     } catch (error) {
+      // 시작 실패한 pipeline은 map에서 제거해 다음 이벤트에 영향을 주지 않게 한다.
       this.pipelines.delete(key);
       this.options.logger.error(
         {
@@ -193,6 +221,7 @@ export class LiveKitMeetingSession {
     if (!pipeline) {
       return;
     }
+    // track 단위 종료는 해당 participant의 다른 track에는 영향을 주지 않는다.
     this.pipelines.delete(key);
     await pipeline.stop("TRACK_ENDED");
   }
@@ -202,6 +231,7 @@ export class LiveKitMeetingSession {
       key.startsWith(`${participantIdentity}:`)
     );
     for (const [key, pipeline] of entries) {
+      // participant가 나가면 해당 participant의 모든 track pipeline을 종료한다.
       this.pipelines.delete(key);
       await pipeline.stop("TRACK_ENDED");
     }
@@ -210,10 +240,12 @@ export class LiveKitMeetingSession {
   private async publishFeedback(
     event: FeedbackGeneratedEnvelope
   ): Promise<void> {
+    // AI가 계산한 feedback 결과는 LiveKit caption channel에도 다시 반영한다.
     await this.captionPublisher?.publishFeedback(event);
   }
 
   private async createToken(): Promise<string> {
+    // LiveKit 서버는 STT agent를 일반 participant처럼 다루므로 grant로 권한을 명시한다.
     const identity = `${this.options.config.LIVEKIT_AGENT_IDENTITY_PREFIX}-${this.options.sessionId}`;
     const token = new AccessToken(
       this.options.config.LIVEKIT_API_KEY,

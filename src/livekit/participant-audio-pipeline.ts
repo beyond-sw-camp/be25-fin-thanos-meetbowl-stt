@@ -44,7 +44,9 @@ export interface ParticipantAudioPipelineOptions {
 }
 
 export class ParticipantAudioPipeline {
+  // 읽기 루프를 외부 stop 호출로 끊을 수 있도록 abort signal을 둔다.
   private readonly abortController = new AbortController();
+  // VAD는 발화 경계, SegmentController는 발화 세그먼트와 event 발행 경계를 담당한다.
   private readonly vad: EnergyVad;
   private readonly segmentController: SegmentController;
   private readonly koSession;
@@ -59,10 +61,12 @@ export class ParticipantAudioPipeline {
   private runningTask?: Promise<void>;
 
   constructor(private readonly options: ParticipantAudioPipelineOptions) {
+    // 에너지 기반 VAD는 "말하기 시작/멈춤"만 판단하고, 실제 텍스트는 provider가 만든다.
     this.vad = new EnergyVad({
       rmsThreshold: options.rmsThreshold,
       silenceMs: options.silenceMs
     });
+    // SegmentController는 provider delta를 받아 caption.updated와 final transcript를 정리한다.
     this.segmentController = new SegmentController({
       meetingId: options.meetingId,
       sessionId: options.sessionId,
@@ -73,8 +77,22 @@ export class ParticipantAudioPipeline {
       nextSequence: options.nextSequence,
       captionPublisher: options.captionPublisher,
       finalSegmentPublisher: options.finalSegmentPublisher,
-      correlationId: options.correlationId
+      correlationId: options.correlationId,
+      onFinalizationError: (error, segmentId, reason) => {
+        this.options.logger.error(
+          {
+            meetingId: this.options.meetingId,
+            sessionId: this.options.sessionId,
+            trackSid: this.options.trackSid,
+            segmentId,
+            reason,
+            error: error.message
+          },
+          "segment finalization failed; active segment retained for flush retry"
+        );
+      }
     });
+    // 한국어 세션은 한국어 음성에 대한 원문 후보와 번역 후보를 누적한다.
     this.koSession = options.translationProvider.createSession("ko", {
       // 한국어 표시용 세션의 원문 후보를 누적한다.
       onSourceDelta: (delta) =>
@@ -84,6 +102,7 @@ export class ParticipantAudioPipeline {
         this.segmentController.appendDelta("koTargetOutput", delta),
       onError: (error) => this.handleProviderError("ko", error)
     });
+    // 영어 세션은 영어 음성에 대한 원문 후보와 번역 후보를 누적한다.
     this.enSession = options.translationProvider.createSession("en", {
       // 영어 표시용 세션의 원문 후보를 누적한다.
       onSourceDelta: (delta) =>
@@ -93,6 +112,7 @@ export class ParticipantAudioPipeline {
         this.segmentController.appendDelta("enTargetOutput", delta),
       onError: (error) => this.handleProviderError("en", error)
     });
+    // source transcription 세션은 canonical source transcript를 담당한다.
     this.transcriptionSession = options.transcriptionProvider.createSession({
       // transcription 전용 세션의 원문 delta를 canonical source로 누적한다.
       onTranscriptDelta: (delta) => {
@@ -110,6 +130,7 @@ export class ParticipantAudioPipeline {
 
   async start(): Promise<void> {
     try {
+      // 먼저 source transcription 연결을 시도하고, 실패하면 translation-only 모드로 내려간다.
       try {
         await this.transcriptionSession.connect();
         this.transcriptionEnabled = true;
@@ -153,6 +174,7 @@ export class ParticipantAudioPipeline {
           );
         }
       } else {
+        // transcription이 살아 있으면 translation은 비용 절감을 위해 끈다.
         this.translationEnabled = false;
         this.options.logger.info(
           {
@@ -185,17 +207,53 @@ export class ParticipantAudioPipeline {
   }
 
   async stop(reason: FinalizationReason): Promise<void> {
+    // 더 이상의 audio frame 유입을 막기 위해 read loop를 먼저 종료한다.
     this.abortController.abort();
+    await this.runningTask;
     if (this.transcriptionEnabled) {
+      // provider가 남겨둔 마지막 turn을 flush하려면 commit이 먼저 필요하다.
       this.transcriptionSession.commitAudio();
+      // completed transcript가 도착할 시간을 약간 주지 않으면 마지막 발화가 잘릴 수 있다.
+      await delay(this.options.translationGraceMs);
     }
-    await Promise.allSettled([
+    // provider close는 best-effort로 처리하고, 그 다음 최종 segment flush를 시도한다.
+    // 이 순서를 지키면 provider가 늦게 내놓는 completed delta를 최대한 흡수할 수 있다.
+    const providerCloseResults = await Promise.allSettled([
       this.koSession.close(),
       this.enSession.close(),
       this.transcriptionSession.close()
     ]);
-    await this.runningTask;
-    await this.segmentController.flush(reason);
+    try {
+      // stop 시점의 마지막 세그먼트를 final 상태로 내보낸다.
+      await this.segmentController.flush(reason);
+    } catch (error) {
+      this.options.logger.warn(
+        {
+          meetingId: this.options.meetingId,
+          sessionId: this.options.sessionId,
+          trackSid: this.options.trackSid,
+          error: error instanceof Error ? error.message : String(error)
+        },
+        "last segment flush failed; retrying once"
+      );
+      await delay(100);
+      await this.segmentController.flush(reason);
+    }
+    const providerCloseFailures = providerCloseResults.filter(
+      (result): result is PromiseRejectedResult =>
+        result.status === "rejected"
+    );
+    if (providerCloseFailures.length > 0) {
+      this.options.logger.warn(
+        {
+          meetingId: this.options.meetingId,
+          sessionId: this.options.sessionId,
+          trackSid: this.options.trackSid,
+          failureCount: providerCloseFailures.length
+        },
+        "one or more STT provider sessions failed to close cleanly"
+      );
+    }
     this.options.logger.info(
       {
         meetingId: this.options.meetingId,
@@ -217,6 +275,7 @@ export class ParticipantAudioPipeline {
   }
 
   private async readAudio(): Promise<void> {
+    // LiveKit 오디오 트랙을 provider가 읽기 쉬운 24kHz mono PCM 스트림으로 변환한다.
     const stream = new AudioStream(this.options.track, {
       sampleRate: 24000,
       numChannels: 1,
@@ -237,9 +296,11 @@ export class ParticipantAudioPipeline {
           break;
         }
         const nowMs = Date.now();
+        // VAD는 말의 시작/끝만 판단하고, 텍스트 누적은 provider callback으로 수행한다.
         // transcription을 우선으로 보내고, translation은 옵션으로 덧붙인다.
         const vad = this.vad.update(value.data, nowMs);
         if (vad.speechStarted) {
+          // 발화가 시작되면 segment를 열어 이후 delta를 같은 세그먼트로 묶는다.
           this.segmentController.startSpeech(nowMs);
         }
         if (this.transcriptionEnabled) {
@@ -273,8 +334,11 @@ export class ParticipantAudioPipeline {
         }
         if (vad.speechStopped) {
           if (this.transcriptionEnabled) {
+            // 발화 종료 시 provider commit을 해 completed transcript를 유도한다.
             this.transcriptionSession.commitAudio();
           }
+          // VAD 종료는 segment controller 입장에서는 발화 종료 신호다.
+          // 무음이 잠깐 있어도 grace timer가 있기 때문에 바로 final은 하지 않는다.
           this.segmentController.stopSpeech(nowMs);
         }
       }
@@ -300,6 +364,7 @@ export class ParticipantAudioPipeline {
     targetLanguage: "ko" | "en" | "source",
     error: Error
   ): void {
+    // provider 오류가 곧바로 전체 세션 종료는 아니다. degraded 상태로만 남긴다.
     this.options.logger.warn(
       {
         meetingId: this.options.meetingId,
@@ -311,4 +376,8 @@ export class ParticipantAudioPipeline {
       "stt provider degraded"
     );
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
