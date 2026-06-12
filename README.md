@@ -91,6 +91,12 @@ npm run probe:realtime-transcription -- /path/to/audio-24khz.wav
 npm run session:start:local -- stt-test-room
 ```
 
+세션 종료와 마지막 active segment flush를 확인한다.
+
+```bash
+npm run session:stop:local -- <session-id>
+```
+
 실행 중인 STT 세션에 테스트 오디오를 publish하고 `caption.updated` 수신까지 확인한다.
 
 ```bash

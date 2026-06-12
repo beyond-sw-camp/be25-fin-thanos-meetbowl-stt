@@ -245,7 +245,7 @@ meetbowl-stt
   ├─ OpenAI Transcription source transcript
   ├─ OpenAI Translation target=ko
   └─ OpenAI Translation target=en
-  ↓ sourceTranscript/sourceCandidate/translation 병합
+  ↓ language/text canonical caption 생성
   ├─ LiveKit DataChannel: caption.updated
   ├─ RabbitMQ: transcript.final.created(finalized only)
   └─ Redis Stream: meeting.feedback.segment.created(finalized only)

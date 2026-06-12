@@ -152,15 +152,13 @@ STT 서버는 finalized segment 전체 목록을 보관하지 않는다. REST AP
     "sessionId": "uuid",
     "segmentId": "uuid",
     "sequence": 12,
-    "sourceLanguage": "ko",
+    "language": "ko",
+    "text": "오늘 회의 안건은 배포 일정입니다.",
     "startedAtMs": 1000,
     "endedAtMs": 5000,
-    "sourceText": "오늘 회의 안건은 배포 일정입니다.",
-    "koText": "오늘 회의 안건은 배포 일정입니다.",
-    "enText": "Today's agenda is the deployment schedule.",
-    "provider": "openai-realtime-stt",
+    "provider": "openai-realtime-transcription",
     "finalizationReason": "VAD_SILENCE",
-    "idempotencyKey": "meetingId:segmentId"
+    "idempotencyKey": "segmentId"
   }
 }
 ```
@@ -171,8 +169,9 @@ STT 서버는 finalized segment 전체 목록을 보관하지 않는다. REST AP
 
 실시간 자막 화면 전달은 LiveKit DataChannel을 기본으로 한다. AI 실시간 피드백도 `meetbowl-stt`가 LiveKit DataChannel로 전달한다.
 
-각 segment의 `sourceText`를 우선 생성하고, `koText`와 `enText`는 보조 번역 출력으로
-생성한다. 표시 탭 선택은 프론트 화면 상태이며 STT session 상태로 저장하지 않는다.
+각 segment의 `text`를 원문 자막 기준으로 생성한다. 이전 클라이언트 호환 기간에는
+`sourceText`, `sourceLanguage`, `sourceTranscript`를 함께 제공할 수 있지만 저장과
+피드백 입력은 `text`, `language`를 기준으로 한다.
 
 ### Caption Event
 
@@ -183,13 +182,11 @@ STT 서버는 finalized segment 전체 목록을 보관하지 않는다. REST AP
   "sessionId": "uuid",
   "segmentId": "uuid",
   "sequence": 12,
+  "status": "STREAMING",
+  "language": "ko",
+  "text": "오늘 회의 안건은 배포 일정입니다.",
   "startedAtMs": 1000,
   "endedAtMs": null,
-  "status": "STREAMING",
-  "sourceLanguage": "ko",
-  "sourceText": "오늘 회의 안건은 배포 일정입니다.",
-  "koText": "오늘 회의 안건은 배포 일정입니다.",
-  "enText": "Today's agenda is the deployment schedule.",
   "updatedAt": "2026-06-02T01:00:00Z"
 }
 ```
