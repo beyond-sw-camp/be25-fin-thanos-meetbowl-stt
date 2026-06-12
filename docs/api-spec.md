@@ -12,7 +12,7 @@
 - Final Transcript 생성
 - 실시간 자막 전달
 - AI 실시간 피드백 결과 전달
-- 실시간 번역 자막 전달
+- 실시간 STT 자막과 보조 번역 자막 전달
 - KOR/ENG 자막 표시 언어 전환
 - 회의 종료 후 Final Transcript 전달
 - 녹음 파일 저장 요청 또는 녹음 메타데이터 전달
@@ -102,16 +102,7 @@ X-Internal-Token: {internalToken}
 {
   "meetingId": "uuid",
   "roomName": "livekit-room-name",
-  "recordingEnabled": true,
-  "sourceLanguage": "ko",
-  "captionLanguages": ["ko", "en"],
-  "participants": [
-    {
-      "userId": "uuid",
-      "livekitIdentity": "user-uuid",
-      "name": "홍길동"
-    }
-  ]
+  "recordingEnabled": true
 }
 ```
 
@@ -139,12 +130,12 @@ Interim/Partial Transcript는 저장하지 않는다.
 
 운영 기본 경로는 RabbitMQ `transcript.final.created` 이벤트 발행이다.
 
-아래 REST API는 상태 조회, 누락된 Final Transcript 강제 flush, 장애 대응용 수동 재처리 용도로만 사용한다.
+STT 서버는 finalized segment 전체 목록을 보관하지 않는다. REST API는 session 상태와
+현재 active segment flush를 위한 장애 대응 용도로만 사용한다.
 
 | Method | Endpoint | 설명 | 호출 주체 |
 |---|---|---|---|
-| GET | `/sessions/{sessionId}/transcripts/final` | 세션 Final Transcript 조회 | meetbowl-be |
-| POST | `/sessions/{sessionId}/transcripts/final/flush` | 누적 Final Transcript 강제 전달 | meetbowl-be/System |
+| POST | `/sessions/{sessionId}/transcripts/final/flush` | active segment 강제 확정/전달 | meetbowl-be/System |
 
 ### Final Transcript Event Payload
 
@@ -159,14 +150,15 @@ Interim/Partial Transcript는 저장하지 않는다.
   "payload": {
     "meetingId": "uuid",
     "sessionId": "uuid",
-    "speakerId": "speaker-1",
-    "speakerName": "홍길동",
+    "segmentId": "uuid",
+    "sequence": 12,
     "language": "ko",
+    "text": "오늘 회의 안건은 배포 일정입니다.",
     "startedAtMs": 1000,
     "endedAtMs": 5000,
-    "text": "오늘 회의 안건은 배포 일정입니다.",
-    "provider": "deepgram",
-    "idempotencyKey": "uuid"
+    "provider": "openai-realtime-transcription",
+    "finalizationReason": "VAD_SILENCE",
+    "idempotencyKey": "segmentId"
   }
 }
 ```
@@ -177,35 +169,25 @@ Interim/Partial Transcript는 저장하지 않는다.
 
 실시간 자막 화면 전달은 LiveKit DataChannel을 기본으로 한다. AI 실시간 피드백도 `meetbowl-stt`가 LiveKit DataChannel로 전달한다.
 
-REST API는 자막 표시 언어 변경과 상태 조회 용도로 둔다.
-
-| Method | Endpoint | 설명 | 호출 주체 |
-|---|---|---|---|
-| PATCH | `/sessions/{sessionId}/caption-language` | 회의 자막 표시 언어 변경 | meetbowl-be |
-| GET | `/sessions/{sessionId}/caption-language` | 현재 자막 표시 언어 조회 | meetbowl-be |
-
-지원 언어:
-
-```text
-ko
-en
-```
+각 segment의 `text`를 원문 자막 기준으로 생성한다. 이전 클라이언트 호환 기간에는
+`sourceText`, `sourceLanguage`, `sourceTranscript`를 함께 제공할 수 있지만 저장과
+피드백 입력은 `text`, `language`를 기준으로 한다.
 
 ### Caption Event
 
 ```json
 {
-  "eventId": "uuid",
+  "eventType": "caption.updated",
   "meetingId": "uuid",
   "sessionId": "uuid",
-  "speakerId": "speaker-1",
-  "speakerName": "홍길동",
-  "sourceLanguage": "ko",
-  "displayLanguage": "en",
-  "text": "The agenda for today's meeting is the deployment schedule.",
-  "isFinal": false,
+  "segmentId": "uuid",
+  "sequence": 12,
+  "status": "STREAMING",
+  "language": "ko",
+  "text": "오늘 회의 안건은 배포 일정입니다.",
   "startedAtMs": 1000,
-  "endedAtMs": 5000
+  "endedAtMs": null,
+  "updatedAt": "2026-06-02T01:00:00Z"
 }
 ```
 
@@ -230,11 +212,13 @@ en
 
 `meetbowl-stt`는 서버 내부 실시간성이 필요한 이벤트를 Redis Stream으로 발행한다.
 
-AI 피드백 입력에는 STT Provider가 확정한 Final Transcript만 사용한다. Interim/Partial Transcript는 LiveKit DataChannel을 통한 화면 자막 표시용이며 Redis Stream으로 AI 서버에 발행하지 않는다.
+AI 피드백 입력에는 Meetbowl finalizer가 확정한 segment만 사용한다. Interim/Partial
+Transcript는 LiveKit DataChannel을 통한 화면 자막 표시용이며 Redis Stream으로
+AI 서버에 발행하지 않는다.
 
 | Stream | Event | 설명 |
 |---|---|---|
-| `meeting:{meetingId}:feedback-source` | `meeting.feedback.requested` | Final Transcript 기반 AI 피드백 분석 요청 |
+| `meeting:{meetingId}:feedback-source` | `meeting.feedback.segment.created` | Finalized segment 단위 AI 피드백 입력 |
 | `meeting:{meetingId}:status` | `stt.status.changed` | 회의 중 STT 상태 이벤트 |
 
 Redis Stream은 장기 보관 용도로 사용하지 않는다.

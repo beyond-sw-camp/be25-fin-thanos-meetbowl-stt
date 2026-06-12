@@ -78,7 +78,8 @@ Final Transcript:
 - RabbitMQ 이벤트 발행 가능
 - 저장 요청 이벤트는 `transcript.final.created`를 사용
 - 영구 저장은 `meetbowl-be` 담당
-- AI 피드백 입력은 Final Transcript 기반 `meeting.feedback.requested` Redis Stream 이벤트를 사용
+- AI 피드백 입력은 finalized segment 기반 `meeting.feedback.segment.created` Redis Stream 이벤트를 사용
+- AI 피드백용 rolling window는 구성하지 않으며 `meetbowl-ai`가 meeting별로 구성
 
 ---
 
@@ -109,7 +110,7 @@ Provider SDK 호출은 adapter 내부에 숨긴다.
 ```text
 transcript.final.created
 recording.completed
-meeting.feedback.requested
+meeting.feedback.segment.created
 ```
 
 구독:
@@ -132,6 +133,8 @@ meeting.feedback.generated
 - 회의 채팅 내용 저장
 - Interim Transcript DB 저장
 - 회의 권한 최종 판단
+- Final Transcript 전체 목록 또는 회의 전체 원문 장기 보관
+- AI 피드백용 transcript window 구성
 
 ---
 
@@ -141,3 +144,5 @@ meeting.feedback.generated
 - 파일 전체 메모리 로딩을 금지한다.
 - 실시간 처리 성능을 우선한다.
 - Provider 장애가 발생해도 회의 자체가 중단되면 안 된다.
+- LiveKit Room 전체 mixed audio를 Provider에 전달하지 않고 participant audio track별로 처리한다.
+- 화자 식별자는 내부 pipeline 구분에만 사용하고 외부 이벤트에는 포함하지 않는다.
