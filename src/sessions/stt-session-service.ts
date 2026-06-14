@@ -21,6 +21,7 @@ export type SttSessionStatus =
 export interface SttSessionView {
   sessionId: string;
   meetingId: string;
+  organizationId: string;
   roomName: string;
   status: SttSessionStatus;
   pipelineCount: number;
@@ -29,6 +30,8 @@ export interface SttSessionView {
 interface SttSessionRecord {
   sessionId: string;
   meetingId: string;
+  organizationId: string;
+  participantUserIds: string[];
   roomName: string;
   correlationId: string;
   status: SttSessionStatus;
@@ -37,6 +40,8 @@ interface SttSessionRecord {
 
 export interface CreateSttSessionCommand {
   meetingId: string;
+  organizationId: string;
+  participantUserIds: string[];
   roomName: string;
   correlationId?: string;
 }
@@ -61,6 +66,8 @@ export class SttSessionService {
     const record: SttSessionRecord = {
       sessionId,
       meetingId: command.meetingId,
+      organizationId: command.organizationId,
+      participantUserIds: command.participantUserIds,
       roomName: command.roomName,
       correlationId: command.correlationId ?? randomUUID(),
       status: "CREATED"
@@ -82,6 +89,8 @@ export class SttSessionService {
     const runtime = new LiveKitMeetingSession({
       meetingId: record.meetingId,
       sessionId: record.sessionId,
+      organizationId: record.organizationId,
+      participantUserIds: record.participantUserIds,
       roomName: record.roomName,
       correlationId: record.correlationId,
       ...this.dependencies
@@ -150,6 +159,7 @@ export class SttSessionService {
     return {
       sessionId: record.sessionId,
       meetingId: record.meetingId,
+      organizationId: record.organizationId,
       roomName: record.roomName,
       status: record.status,
       pipelineCount: record.runtime?.pipelineCount ?? 0
