@@ -14,6 +14,8 @@ export interface TranscriptSegment {
   segmentId: string;
   meetingId: string;
   sessionId: string;
+  organizationId: string;
+  participantUserIds: string[];
   sequence: number;
   startedAtMs: number;
   endedAtMs?: number;
@@ -35,6 +37,8 @@ export interface ActiveTranscriptSegment {
   segmentId: string;
   meetingId: string;
   sessionId: string;
+  organizationId: string;
+  participantUserIds: string[];
   startedAtMs: number;
   endedAtMs?: number;
   sourceTranscript: string;

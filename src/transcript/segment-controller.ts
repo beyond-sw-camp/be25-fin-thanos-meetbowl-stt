@@ -14,6 +14,8 @@ import type {
 export interface SegmentControllerOptions {
   meetingId: string;
   sessionId: string;
+  organizationId: string;
+  participantUserIds: string[];
   meetingStartedAtMs: number;
   noDeltaTimeoutMs: number;
   translationGraceMs: number;
@@ -60,6 +62,8 @@ export class SegmentController {
       segmentId: randomUUID(),
       meetingId: this.options.meetingId,
       sessionId: this.options.sessionId,
+      organizationId: this.options.organizationId,
+      participantUserIds: this.options.participantUserIds,
       startedAtMs: Math.max(0, nowMs - this.options.meetingStartedAtMs),
       sourceTranscript: "",
       sourceCandidateKo: "",
@@ -237,6 +241,8 @@ export class SegmentController {
       segmentId: active.segmentId,
       meetingId: active.meetingId,
       sessionId: active.sessionId,
+      organizationId: active.organizationId,
+      participantUserIds: active.participantUserIds,
       sequence: this.sequence,
       startedAtMs: active.startedAtMs,
       endedAtMs: active.endedAtMs,
