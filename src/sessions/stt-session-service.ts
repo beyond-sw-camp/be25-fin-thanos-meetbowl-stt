@@ -52,6 +52,7 @@ export interface SttSessionServiceDependencies {
 
 export class SttSessionService {
   private readonly sessions = new Map<string, SttSessionRecord>();
+  private readonly meetingSessionIndex = new Map<string, string>();
 
   constructor(private readonly dependencies: SttSessionServiceDependencies) {}
 
@@ -66,7 +67,46 @@ export class SttSessionService {
       status: "CREATED"
     };
     this.sessions.set(sessionId, record);
+    this.meetingSessionIndex.set(command.meetingId, sessionId);
     return this.toView(record);
+  }
+
+  async ensureStarted(command: CreateSttSessionCommand): Promise<SttSessionView> {
+    const existingSessionId = this.meetingSessionIndex.get(command.meetingId);
+    if (!existingSessionId) {
+      const created = this.create(command);
+      return this.start(created.sessionId);
+    }
+
+    const record = this.sessions.get(existingSessionId);
+    if (!record) {
+      // 인덱스만 남은 비정상 상태에서는 새 세션을 다시 만들고 인덱스를 복구한다.
+      this.meetingSessionIndex.delete(command.meetingId);
+      const created = this.create(command);
+      return this.start(created.sessionId);
+    }
+
+    if (record.status === "RUNNING" || record.status === "STARTING") {
+      return this.toView(record);
+    }
+
+    if (record.status === "FAILED") {
+      // FAILED 세션은 재사용하지 않고 새 세션으로 교체해 반복 실패를 분리한다.
+      this.sessions.delete(record.sessionId);
+      this.meetingSessionIndex.delete(record.meetingId);
+      const created = this.create(command);
+      return this.start(created.sessionId);
+    }
+
+    if (record.roomName !== command.roomName) {
+      // 같은 meetingId에 다른 roomName이 들어오면 기존 세션 대신 최신 room 기준으로 다시 만든다.
+      this.sessions.delete(record.sessionId);
+      this.meetingSessionIndex.delete(record.meetingId);
+      const created = this.create(command);
+      return this.start(created.sessionId);
+    }
+
+    return this.start(record.sessionId);
   }
 
   async start(sessionId: string): Promise<SttSessionView> {

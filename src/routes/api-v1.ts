@@ -88,6 +88,19 @@ export const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
   );
 
   app.post(
+    "/sessions/ensure-started",
+    { preHandler: requireInternalToken },
+    async (request, reply) => {
+      const parsed = createSessionSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return validationError(reply, parsed.error);
+      }
+      // 회의 화면 join마다 동일 meetingId 요청이 반복될 수 있어 내부 API는 meeting 기준으로 멱등하게 세션을 보장한다.
+      return success(await service.ensureStarted(parsed.data));
+    }
+  );
+
+  app.post(
     "/sessions/:sessionId/start",
     { preHandler: requireInternalToken },
     async (request, reply) =>
