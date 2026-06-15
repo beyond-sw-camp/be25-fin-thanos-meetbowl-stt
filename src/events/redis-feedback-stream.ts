@@ -65,6 +65,8 @@ export class RedisFeedbackStream implements FinalSegmentPublisher {
       {
         meetingId: segment.meetingId,
         sessionId: segment.sessionId,
+        organizationId: segment.organizationId,
+        participantUserIds: segment.participantUserIds,
         segmentId: segment.segmentId,
         sequence: segment.sequence,
         language: segment.language,

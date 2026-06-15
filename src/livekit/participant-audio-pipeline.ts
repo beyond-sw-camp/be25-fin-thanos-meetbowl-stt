@@ -24,6 +24,8 @@ export interface PipelineLogger {
 export interface ParticipantAudioPipelineOptions {
   meetingId: string;
   sessionId: string;
+  organizationId: string;
+  participantUserIds: string[];
   correlationId: string;
   participantIdentity: string;
   trackSid: string;
@@ -70,6 +72,8 @@ export class ParticipantAudioPipeline {
     this.segmentController = new SegmentController({
       meetingId: options.meetingId,
       sessionId: options.sessionId,
+      organizationId: options.organizationId,
+      participantUserIds: options.participantUserIds,
       meetingStartedAtMs: options.meetingStartedAtMs,
       noDeltaTimeoutMs: options.noDeltaTimeoutMs,
       translationGraceMs: options.translationGraceMs,

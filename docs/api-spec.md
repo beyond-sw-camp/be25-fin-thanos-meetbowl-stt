@@ -101,6 +101,8 @@ X-Internal-Token: {internalToken}
 ```json
 {
   "meetingId": "uuid",
+  "organizationId": "uuid",
+  "participantUserIds": ["uuid", "uuid"],
   "roomName": "livekit-room-name",
   "recordingEnabled": true
 }
@@ -114,6 +116,7 @@ X-Internal-Token: {internalToken}
   "data": {
     "sessionId": "uuid",
     "meetingId": "uuid",
+    "organizationId": "uuid",
     "status": "CREATED"
   },
   "message": null
@@ -222,6 +225,32 @@ AI 서버에 발행하지 않는다.
 | `meeting:{meetingId}:status` | `stt.status.changed` | 회의 중 STT 상태 이벤트 |
 
 Redis Stream은 장기 보관 용도로 사용하지 않는다.
+
+### Feedback Segment Event Payload
+
+```json
+{
+  "eventId": "uuid",
+  "eventType": "meeting.feedback.segment.created",
+  "occurredAt": "2026-06-02T01:00:00Z",
+  "producer": "stt-server",
+  "version": 1,
+  "correlationId": "uuid",
+  "payload": {
+    "meetingId": "uuid",
+    "sessionId": "uuid",
+    "organizationId": "uuid",
+    "participantUserIds": ["uuid", "uuid"],
+    "segmentId": "uuid",
+    "sequence": 12,
+    "language": "ko",
+    "text": "오늘 회의 안건은 배포 일정입니다.",
+    "isFinal": true,
+    "startedAtMs": 1000,
+    "endedAtMs": 5000
+  }
+}
+```
 
 ## 9.1 Redis Stream Consumer
 

@@ -29,6 +29,8 @@ import {
 export interface LiveKitMeetingSessionOptions {
   meetingId: string;
   sessionId: string;
+  organizationId: string;
+  participantUserIds: string[];
   roomName: string;
   correlationId: string;
   config: AppConfig;
@@ -173,6 +175,8 @@ export class LiveKitMeetingSession {
     const pipeline = new ParticipantAudioPipeline({
       meetingId: this.options.meetingId,
       sessionId: this.options.sessionId,
+      organizationId: this.options.organizationId,
+      participantUserIds: this.options.participantUserIds,
       correlationId: this.options.correlationId,
       participantIdentity: participant.identity,
       trackSid,
