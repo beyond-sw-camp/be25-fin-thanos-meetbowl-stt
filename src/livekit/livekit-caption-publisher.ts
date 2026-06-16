@@ -43,13 +43,19 @@ export class LiveKitCaptionPublisher implements CaptionPublisher {
     this.publishedCaptionCount += 1;
     if (this.publishedCaptionCount === 1 || segment.status === "FINALIZED") {
       // 첫 패킷과 최종 패킷만 로깅해 스트리밍 중복 로그를 줄인다.
+      // 중복 자막 분석을 위해 segment 식별값과 최종 표시 문장의 앞부분을 함께 남긴다.
       this.logger.info(
         {
           ...this.context,
           segmentId: segment.segmentId,
           sequence: segment.sequence,
           status: segment.status,
-          publishedCaptionCount: this.publishedCaptionCount
+          publishedCaptionCount: this.publishedCaptionCount,
+          sourceLanguage: segment.sourceLanguage,
+          textPreview: buildTextPreview(segment.text),
+          sourceTranscriptPreview: buildTextPreview(
+            segment.sourceTranscript?.trim() || ""
+          )
         },
         "caption.updated published to LiveKit DataChannel"
       );
@@ -80,4 +86,14 @@ export class LiveKitCaptionPublisher implements CaptionPublisher {
       }
     );
   }
+}
+
+function buildTextPreview(text: string): string {
+  const normalized = text.trim().replaceAll(/\s+/g, " ");
+  if (!normalized) {
+    return "";
+  }
+  return normalized.length > 80
+    ? `${normalized.slice(0, 77)}...`
+    : normalized;
 }

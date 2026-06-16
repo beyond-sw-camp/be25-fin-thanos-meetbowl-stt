@@ -93,12 +93,10 @@ export class SegmentController {
     if (!normalized) {
       return;
     }
-    if (!this.active) {
-      // completed transcript가 먼저 오는 특이 케이스도 있으므로 발화 세그먼트를 열어준다.
-      this.startSpeech(nowMs);
-    }
     const active = this.active;
     if (!active) {
+      // 이미 finalize가 끝난 뒤 늦게 도착한 completed transcript는
+      // 같은 발화를 새 segment로 다시 열어 중복 자막을 만들 수 있으므로 버린다.
       return;
     }
     active.sourceTranscript = mergeCompletedTranscript(
@@ -121,12 +119,10 @@ export class SegmentController {
     if (!delta) {
       return;
     }
-    if (!this.active) {
-      // delta가 먼저 도착해도 같은 발화로 처리할 수 있게 세그먼트를 연다.
-      this.startSpeech(nowMs);
-    }
     const active = this.active;
     if (!active) {
+      // finalize 이후 늦게 도착한 delta를 다시 세그먼트로 열면
+      // 같은 발화가 새 segmentId로 한 번 더 나타날 수 있어 무시한다.
       return;
     }
     active[channel] += delta;

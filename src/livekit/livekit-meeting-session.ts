@@ -6,6 +6,7 @@ import {
   type RemoteTrack,
   type RemoteTrackPublication
 } from "@livekit/rtc-node";
+import { TrackKind } from "@livekit/rtc-ffi-bindings";
 import { AccessToken } from "livekit-server-sdk";
 
 import type { AppConfig } from "../config/env.js";
@@ -64,6 +65,12 @@ export class LiveKitMeetingSession {
     );
     this.room
       .on(
+        RoomEvent.TrackPublished,
+        (publication: RemoteTrackPublication, participant: RemoteParticipant) => {
+          void this.ensurePublicationSubscribed(publication, participant);
+        }
+      )
+      .on(
         RoomEvent.TrackSubscribed,
         (
           track: RemoteTrack,
@@ -97,6 +104,9 @@ export class LiveKitMeetingSession {
       autoSubscribe: true,
       dynacast: false
     });
+    // connect 시점에 이미 존재하는 remote publication은 TrackSubscribed 이벤트를 놓칠 수 있어
+    // room snapshot을 한 번 순회하며 audio publication 구독과 attach를 다시 보장한다.
+    await this.syncExistingRemoteAudioPublications();
     // finalized segment가 나올 때 AI 피드백 입력용 Redis stream에도 바로 전달할 수 있게 consumer를 연다.
     await this.options.feedbackStream.consumeFeedback(
       this.options.meetingId,
@@ -145,6 +155,33 @@ export class LiveKitMeetingSession {
 
   get pipelineCount(): number {
     return this.pipelines.size;
+  }
+
+  private async syncExistingRemoteAudioPublications(): Promise<void> {
+    const participants = [...this.room.remoteParticipants.values()];
+    for (const participant of participants) {
+      const publications = [...participant.trackPublications.values()];
+      for (const publication of publications) {
+        await this.ensurePublicationSubscribed(publication, participant);
+      }
+    }
+  }
+
+  private async ensurePublicationSubscribed(
+    publication: RemoteTrackPublication,
+    participant: RemoteParticipant
+  ): Promise<void> {
+    if (publication.kind !== TrackKind.KIND_AUDIO) {
+      return;
+    }
+
+    if (!publication.subscribed) {
+      publication.setSubscribed(true);
+    }
+
+    if (publication.track instanceof RemoteAudioTrack) {
+      await this.attachTrack(publication.track, publication, participant);
+    }
   }
 
   private async attachTrack(
