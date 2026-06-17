@@ -16,6 +16,9 @@ test("publishes streaming updates and one finalized segment", async () => {
     maxSegmentDurationMs: 1000,
     nextSequence: () => 0,
     correlationId: "correlation-id",
+    logger: {
+      info() {}
+    },
     captionPublisher: {
       async publishCaption(segment) {
         captions.push(segment);
@@ -67,6 +70,9 @@ test("retains the active segment when final publishing fails and retries on flus
     maxSegmentDurationMs: 1000,
     nextSequence: () => 3,
     correlationId: "correlation-id",
+    logger: {
+      info() {}
+    },
     captionPublisher: {
       async publishCaption() {}
     },

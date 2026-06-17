@@ -1,6 +1,12 @@
+
+/**
+ * 발화 세그먼트(Segment)의 생성, 델타 데이터 누적 및 최종 확정을 제어하는 클래스입니다.
+ * 실시간 스트리밍 중인 자막 조각들을 논리적인 문장 단위로 묶고 중복을 제거합니다.
+ */
 import { randomUUID } from "node:crypto";
 
 import { buildDisplayTexts } from "./display-text-builder.js";
+import type { PipelineLogger } from "../livekit/participant-audio-pipeline.js";
 import type {
   CaptionPublisher,
   FinalSegmentPublisher
@@ -22,6 +28,7 @@ export interface SegmentControllerOptions {
   captionPublisher: CaptionPublisher;
   finalSegmentPublisher: FinalSegmentPublisher;
   correlationId: string;
+  logger: Pick<PipelineLogger, "info">;
   onFinalizationError?: (
     error: Error,
     segmentId: string,
@@ -37,30 +44,37 @@ type TranscriptChannel =
   | "enTargetOutput";
 
 export class SegmentController {
-  // active segment는 지금 말하고 있는 한 발화를 나타낸다.
+  /** 현재 활성화된(말하기가 진행 중인) 세그먼트 데이터입니다. */
   private active?: ActiveTranscriptSegment;
-  // sequence는 세션 전체에서 transcript ordering을 유지하기 위한 단조 증가 번호다.
+  /** 세션 내 자막 순서를 보장하기 위한 순번입니다. */
   private sequence?: number;
-  // 같은 세그먼트에 대한 streaming/final 이벤트를 너무 자주 내보내지 않기 위한 타이머들이다.
+  
+  // 상태 제어를 위한 각종 타이머
   private noDeltaTimer?: NodeJS.Timeout;
   private maxDurationTimer?: NodeJS.Timeout;
   private graceTimer?: NodeJS.Timeout;
-  // finalizing 중에는 중복 flush가 들어와도 같은 segment를 두 번 내보내지 않는다.
+
+  /** 확정(Finalize) 프로세스가 중복 실행되지 않도록 방지하는 플래그입니다. */
   private finalizing = false;
+  /** 다중 마이크 환경에서 동일 문장이 중복 발행되는 것을 막기 위한 최근 확정 텍스트 캐시입니다. */
+  private lastFinalizedText = "";
+  private lastFinalizedAtMs = 0;
 
   constructor(private readonly options: SegmentControllerOptions) {}
 
+  /** [발화 시작] 새로운 세그먼트를 생성하고 시간 및 순번을 할당합니다. */
   startSpeech(nowMs = Date.now()): void {
-    if (this.active) {
-      return;
-    }
-    // 새 발화가 시작되면 segmentId/sequence를 새로 발급하고 기준 시간을 초기화한다.
+    if (this.active) return;
+
+    const gapFromPreviousFinalMs =
+      this.lastFinalizedAtMs > 0 ? Math.max(0, nowMs - this.lastFinalizedAtMs) : undefined;
     this.sequence = this.options.nextSequence();
     this.active = {
       segmentId: randomUUID(),
       meetingId: this.options.meetingId,
       sessionId: this.options.sessionId,
       startedAtMs: Math.max(0, nowMs - this.options.meetingStartedAtMs),
+      startedAtEpochMs: nowMs,
       sourceTranscript: "",
       sourceCandidateKo: "",
       sourceCandidateEn: "",
@@ -68,86 +82,97 @@ export class SegmentController {
       enTargetOutput: "",
       lastDeltaAtMs: nowMs
     };
-    // 최대 길이를 넘기면 무음이 없어도 안전하게 세그먼트를 마감한다.
+    this.options.logger.info(
+      {
+        meetingId: this.options.meetingId,
+        sessionId: this.options.sessionId,
+        segmentId: this.active.segmentId,
+        sequence: this.sequence,
+        gapFromPreviousFinalMs
+      },
+      "STT speech segment opened"
+    );
+
+    // 설정된 최대 발화 시간을 초과할 경우 강제로 세그먼트를 분리하기 위한 타이머 가동
     this.maxDurationTimer = setTimeout(() => {
       this.finalizeFromTimer("MAX_DURATION");
     }, this.options.maxSegmentDurationMs);
   }
 
+  /** [발화 종료] VAD에 의해 무음이 감지되면 호출되며, 즉시 종료하지 않고 Grace Time 동안 엔진 응답을 대기합니다. */
   stopSpeech(nowMs = Date.now()): void {
-    if (!this.active) {
-      return;
-    }
-    // VAD가 발화 종료를 판단한 시점의 상대 시간을 기록해 finalization reason을 남긴다.
+    if (!this.active) return;
+
     this.active.endedAtMs = Math.max(
       this.active.startedAtMs,
       nowMs - this.options.meetingStartedAtMs
     );
     this.active.speechStoppedAtMs = nowMs;
-    // 바로 종료하지 않고 grace timer를 둬 completed transcript가 뒤늦게 와도 흡수한다.
+    
+    // 엔진으로부터 올 수 있는 마지막 텍스트 조각을 기다리기 위해 확정 예약
     this.scheduleGraceFinalization("VAD_SILENCE");
   }
 
+  /** 핵심 전사 엔진의 최종 완성 문장을 수신했을 때 기존 데이터를 교체하고 스트리밍 업데이트를 보냅니다. */
   replaceSourceTranscript(transcript: string, nowMs = Date.now()): void {
     const normalized = transcript.trim();
-    if (!normalized) {
-      return;
+    if (!normalized) return;
+    if (!this.active) {
+      // VAD보다 provider delta/completed가 먼저 오면 화면용 세그먼트를 즉시 연다.
+      this.startSpeech(nowMs);
     }
-    const active = this.active;
-    if (!active) {
-      // 이미 finalize가 끝난 뒤 늦게 도착한 completed transcript는
-      // 같은 발화를 새 segment로 다시 열어 중복 자막을 만들 수 있으므로 버린다.
-      return;
-    }
-    active.sourceTranscript = mergeCompletedTranscript(
-      active.sourceTranscript,
+    if (!this.active) return;
+
+    this.active.sourceTranscript = mergeCompletedTranscript(
+      this.active.sourceTranscript,
       normalized
     );
-    active.lastDeltaAtMs = nowMs;
-    this.scheduleNoDeltaFinalization();
-    if (active.speechStoppedAtMs !== undefined) {
-      this.scheduleGraceFinalization("VAD_SILENCE");
-    }
+    this.active.lastDeltaAtMs = nowMs;
+    this.refreshTimers();
     void this.publishStreaming();
   }
 
+  /** 엔진으로부터 수신된 텍스트 델타(조각)를 해당 채널에 누적합니다. */
   appendDelta(
     channel: TranscriptChannel,
     delta: string,
     nowMs = Date.now()
   ): void {
-    if (!delta) {
-      return;
+    if (!delta) return;
+    if (!this.active) {
+      // 실시간 자막은 final 확정보다 빠르게 보여야 하므로 첫 delta 수신 시 세그먼트를 연다.
+      this.startSpeech(nowMs);
     }
-    const active = this.active;
-    if (!active) {
-      // finalize 이후 늦게 도착한 delta를 다시 세그먼트로 열면
-      // 같은 발화가 새 segmentId로 한 번 더 나타날 수 있어 무시한다.
-      return;
-    }
-    active[channel] += delta;
-    active.lastDeltaAtMs = nowMs;
-    this.scheduleNoDeltaFinalization();
-    if (active.speechStoppedAtMs !== undefined) {
-      this.scheduleGraceFinalization("VAD_SILENCE");
-    }
+    if (!this.active) return;
+
+    this.active[channel] += delta;
+    this.active.lastDeltaAtMs = nowMs;
+    this.refreshTimers();
     void this.publishStreaming();
   }
 
+  /** 진행 중인 발화를 즉시 강제 마감합니다. */
   async flush(reason: FinalizationReason): Promise<void> {
-    // 외부 stop/flush API는 여기로 모이고, 최종 발행 순서는 finalize에서 통제한다.
     await this.finalize(reason);
   }
 
+  /** 테스트와 상위 제어 로직에서 현재 발화 세그먼트 존재 여부를 확인할 때 사용합니다. */
   hasActiveSegment(): boolean {
     return this.active !== undefined;
   }
 
-  private scheduleNoDeltaFinalization(): void {
-    if (this.noDeltaTimer) {
-      clearTimeout(this.noDeltaTimer);
+  /** 델타 수신 시 타이머들을 초기화하여 발화 중단을 방지합니다. */
+  private refreshTimers(): void {
+    this.scheduleNoDeltaFinalization();
+    if (this.active?.speechStoppedAtMs !== undefined) {
+      this.scheduleGraceFinalization("VAD_SILENCE");
     }
-    // delta가 더 이상 오지 않는데 이미 speechStopped 상태라면 finalization을 예약한다.
+  }
+
+  private scheduleNoDeltaFinalization(): void {
+    if (this.noDeltaTimer) clearTimeout(this.noDeltaTimer);
+    
+    // 무음 상태인데 텍스트 변화도 없는 경우를 대비한 세이프 가드
     this.noDeltaTimer = setTimeout(() => {
       if (this.active?.speechStoppedAtMs !== undefined) {
         this.scheduleGraceFinalization("NO_DELTA_TIMEOUT");
@@ -156,10 +181,8 @@ export class SegmentController {
   }
 
   private scheduleGraceFinalization(reason: FinalizationReason): void {
-    if (this.graceTimer) {
-      clearTimeout(this.graceTimer);
-    }
-    // completed transcript가 늦게 도착하는 provider 특성을 감안해 grace 기간을 둔다.
+    if (this.graceTimer) clearTimeout(this.graceTimer);
+    
     const graceMs = Math.max(
       this.options.translationGraceMs,
       this.options.noDeltaTimeoutMs
@@ -169,65 +192,91 @@ export class SegmentController {
     }, graceMs);
   }
 
+  /** [스트리밍 업데이트] 현재까지 누적된 데이터를 화면 표시용(STREAMING)으로 즉시 발행합니다. */
   private async publishStreaming(): Promise<void> {
-    // STREAMING은 아직 말하는 중인 화면 갱신용으로만 쓰고, text가 없으면 발행하지 않는다.
     const segment = this.toTranscriptSegment("STREAMING");
     if (segment.text) {
       await this.options.captionPublisher.publishCaption(segment);
     }
   }
 
+  /** 
+   * [최종 확정] 현재 세그먼트를 마감하고 영구 저장소 및 분석 서버로 발행합니다.
+   * 중복 문장 필터링 로직을 거쳐 유효한 데이터만 전송합니다.
+   */
   private async finalize(reason: FinalizationReason): Promise<void> {
-    if (!this.active || this.finalizing) {
-      return;
-    }
-    // finalize가 겹치면 같은 segment를 중복 발행할 수 있으므로 잠금 플래그를 건다.
+    if (!this.active || this.finalizing) return;
+
     this.finalizing = true;
     this.clearTimers();
     const segment = this.toTranscriptSegment("FINALIZED");
 
     try {
       if (!segment.text) {
-        // 실제 텍스트가 없는 segment는 버리고 상태만 초기화한다.
-        this.active = undefined;
-        this.sequence = undefined;
+        this.reset();
         return;
       }
-      // caption.updated FINALIZED를 먼저 내보내 화면이 최종 문장으로 고정되게 한다.
+
+      // 다중 트랙 중복 데이터 억제
+      if (this.isDuplicateFinalSegment(segment.text)) {
+        this.reset();
+        return;
+      }
+
+      // 1. 화면 자막 고정 (LiveKit DataChannel)
       await this.options.captionPublisher.publishCaption(segment);
-      // 이후 RabbitMQ/Redis 같은 final segment sink로 전달한다.
+      // 2. 최종 저장 요청 (RabbitMQ) 및 실시간 분석(Redis Stream) 발행
       await this.options.finalSegmentPublisher.publishFinalSegment(
         segment,
         reason,
         this.options.correlationId
       );
-      this.active = undefined;
-      this.sequence = undefined;
+      const elapsedMs = segment.startedAtMs === undefined
+        ? undefined
+        : Math.max(0, (segment.endedAtMs ?? segment.startedAtMs) - segment.startedAtMs);
+      this.options.logger.info(
+        {
+          meetingId: segment.meetingId,
+          sessionId: segment.sessionId,
+          segmentId: segment.segmentId,
+          sequence: segment.sequence,
+          reason,
+          elapsedMs
+        },
+        "STT segment finalized"
+      );
+
+      this.recordFinalizedText(segment.text);
+      this.reset();
     } finally {
       this.finalizing = false;
     }
   }
 
+  private reset(): void {
+    this.active = undefined;
+    this.sequence = undefined;
+  }
+
   private finalizeFromTimer(reason: FinalizationReason): void {
-    // timer callback에서는 throw를 직접 올리지 않고 onFinalizationError 훅으로만 전달한다.
     void this.finalize(reason).catch((error) => {
-      const active = this.active;
       this.options.onFinalizationError?.(
         error instanceof Error ? error : new Error(String(error)),
-        active?.segmentId ?? "unknown",
+        this.active?.segmentId ?? "unknown",
         reason
       );
     });
   }
 
+  /** 현재 활성 데이터를 외부 전송용 인터페이스 객체로 변환합니다. */
   private toTranscriptSegment(
     status: TranscriptSegment["status"]
   ): TranscriptSegment {
     const active = this.active;
     if (!active || this.sequence === undefined) {
-      throw new Error("Cannot build transcript without an active segment");
+      throw new Error("비활성 세그먼트에서 데이터 변환 시도");
     }
-    // display builder가 고른 텍스트를 primary text/sourceText에 반영하고, 원본 후보는 그대로 보존한다.
+
     const display = buildDisplayTexts(active);
     return {
       segmentId: active.segmentId,
@@ -235,6 +284,7 @@ export class SegmentController {
       sessionId: active.sessionId,
       sequence: this.sequence,
       startedAtMs: active.startedAtMs,
+      startedAtEpochMs: active.startedAtEpochMs,
       endedAtMs: active.endedAtMs,
       language: display.sourceLanguage,
       text: display.sourceText,
@@ -252,22 +302,32 @@ export class SegmentController {
   }
 
   private clearTimers(): void {
-    // 세그먼트가 끝나면 관련 타이머를 모두 해제해 다음 발화에 영향이 남지 않게 한다.
-    if (this.noDeltaTimer) {
-      clearTimeout(this.noDeltaTimer);
-    }
-    if (this.maxDurationTimer) {
-      clearTimeout(this.maxDurationTimer);
-    }
-    if (this.graceTimer) {
-      clearTimeout(this.graceTimer);
-    }
+    if (this.noDeltaTimer) clearTimeout(this.noDeltaTimer);
+    if (this.maxDurationTimer) clearTimeout(this.maxDurationTimer);
+    if (this.graceTimer) clearTimeout(this.graceTimer);
     this.noDeltaTimer = undefined;
     this.maxDurationTimer = undefined;
     this.graceTimer = undefined;
   }
+
+  private isDuplicateFinalSegment(text: string, nowMs = Date.now()): boolean {
+    const normalized = normalizeForDuplicateCheck(text);
+    if (!normalized) return false;
+    
+    // 짧은 시간(2.5초) 내에 동일한 문장이 다른 트랙에서 또 확정되는 경우 중복으로 간주
+    return (
+      this.lastFinalizedText === normalized &&
+      nowMs - this.lastFinalizedAtMs <= 2500
+    );
+  }
+
+  private recordFinalizedText(text: string, nowMs = Date.now()): void {
+    this.lastFinalizedText = normalizeForDuplicateCheck(text);
+    this.lastFinalizedAtMs = nowMs;
+  }
 }
 
+/** 핵심 전사 엔진의 문장이 일부 누락되어 오더라도 누적 데이터와 비교하여 더 완전한 쪽을 선택합니다. */
 function mergeCompletedTranscript(
   currentTranscript: string,
   completedTranscript: string
@@ -275,24 +335,14 @@ function mergeCompletedTranscript(
   const current = currentTranscript.trim();
   const completed = completedTranscript.trim();
 
-  if (!current) {
-    // 이전 delta가 없으면 completed를 그대로 사용한다.
-    return completed;
-  }
-  if (!completed) {
-    // completed가 비어 있으면 기존 누적 원문을 유지한다.
-    return current;
-  }
-  if (completed.includes(current)) {
-    // completed가 더 완전한 경우에는 completed로 교체한다.
-    return completed;
-  }
-  if (current.includes(completed)) {
-    // completed가 앞부분만 잘라서 온 경우에는 기존 원문을 유지한다.
-    return current;
-  }
+  if (!current) return completed;
+  if (!completed) return current;
+  if (completed.includes(current)) return completed;
+  if (current.includes(completed)) return current;
 
-  // Provider completion can omit a prefix already delivered through deltas.
-  // 둘 다 완전하지 않으면 길이 기준으로 더 완전해 보이는 문자열을 택한다.
   return completed.length < current.length * 0.85 ? current : completed;
+}
+
+function normalizeForDuplicateCheck(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }
