@@ -1,3 +1,7 @@
+/**
+ * 최종 확정된 자막 데이터를 RabbitMQ 메시지 브로커로 전송하는 퍼블리셔 클래스입니다.
+ * 신뢰성 있는 메시지 전송을 위해 Confirm Channel과 영속성(Persistent) 설정을 사용합니다.
+ */
 import amqp, {
   type ConfirmChannel,
   type ChannelModel
@@ -19,7 +23,7 @@ interface PublisherLogger {
 export class RabbitMqTranscriptPublisher implements FinalSegmentPublisher {
   private connection?: ChannelModel;
   private channel?: ConfirmChannel;
-  // segmentId 단위로 이미 발행한 final transcript는 다시 보내지 않는다.
+  /** 중복 발행 방지를 위해 프로세스 런타임 동안 관리되는 발행 완료 세그먼트 ID 집합입니다. */
   private readonly publishedSegmentIds = new Set<string>();
 
   constructor(
@@ -28,25 +32,30 @@ export class RabbitMqTranscriptPublisher implements FinalSegmentPublisher {
     private readonly logger: PublisherLogger
   ) {}
 
+  /** [연결 수립] RabbitMQ 서버에 접속하고 토픽 익스체인지를 선언합니다. */
   async connect(): Promise<void> {
-    // confirm channel을 써서 broker ack를 기다릴 수 있게 만든다.
     this.connection = await amqp.connect(this.url);
+    // 발행 확인(Confirmation) 기능을 지원하는 채널을 생성합니다.
     this.channel = await this.connection.createConfirmChannel();
     await this.channel.assertExchange(this.exchange, "topic", {
-      durable: true
+      durable: true // 브로커 재시작 시에도 익스체인지 유지
     });
   }
 
+  /** 
+   * [자막 발행] 최종 확정된 세그먼트를 RabbitMQ로 전송합니다.
+   * @param segment 확정된 자막 세그먼트
+   * @param reason 확정 사유
+   * @param correlationId 트랜잭션 추적 ID
+   */
   async publishFinalSegment(
     segment: TranscriptSegment,
     reason: FinalizationReason,
     correlationId: string
   ): Promise<void> {
-    if (this.publishedSegmentIds.has(segment.segmentId)) {
-      return;
-    }
+    if (this.publishedSegmentIds.has(segment.segmentId)) return;
+
     const channel = this.requireChannel();
-    // downstream consumer가 저장/재처리하기 쉬운 최소 payload만 보낸다.
     const payload: FinalTranscriptPayload = {
       meetingId: segment.meetingId,
       sessionId: segment.sessionId,
@@ -60,6 +69,7 @@ export class RabbitMqTranscriptPublisher implements FinalSegmentPublisher {
       finalizationReason: reason,
       idempotencyKey: segment.segmentId
     };
+
     const envelope = createEventEnvelope(
       "transcript.final.created",
       correlationId,
@@ -67,7 +77,10 @@ export class RabbitMqTranscriptPublisher implements FinalSegmentPublisher {
     );
 
     try {
-      // persistent + confirm 조합으로 실제 broker 기록까지 확인한다.
+      /**
+       * 메시지를 직렬화하여 발행합니다.
+       * deliveryMode: 2 설정을 통해 메시지를 디스크에 저장(Persistence)하도록 요청합니다.
+       */
       channel.publish(
         this.exchange,
         "transcript.final.created",
@@ -79,19 +92,16 @@ export class RabbitMqTranscriptPublisher implements FinalSegmentPublisher {
           correlationId
         }
       );
+
+      // 브로커로부터 수신 확인(ACK)이 올 때까지 비동기로 대기합니다.
       await channel.waitForConfirms();
       this.publishedSegmentIds.add(segment.segmentId);
-      this.logger.info(
-        publishLogContext(segment),
-        "transcript.final.created published to RabbitMQ"
-      );
+      
+      this.logger.info(publishLogContext(segment), "최종 자막 RabbitMQ 발행 성공");
     } catch (error) {
       this.logger.error(
-        {
-          ...publishLogContext(segment),
-          error: error instanceof Error ? error.message : String(error)
-        },
-        "transcript.final.created RabbitMQ publish failed"
+        { ...publishLogContext(segment), error: (error as Error).message },
+        "최종 자막 RabbitMQ 발행 실패"
       );
       throw error;
     }
@@ -103,20 +113,16 @@ export class RabbitMqTranscriptPublisher implements FinalSegmentPublisher {
   }
 
   private requireChannel(): ConfirmChannel {
-    if (!this.channel) {
-      throw new Error("RabbitMQ publisher is not connected");
-    }
+    if (!this.channel) throw new Error("RabbitMQ 연결이 수립되지 않았습니다.");
     return this.channel;
   }
 }
 
 function publishLogContext(segment: TranscriptSegment): Record<string, unknown> {
-  // 로그에는 원문 전체 대신 식별에 필요한 키만 남긴다.
   return {
     meetingId: segment.meetingId,
     sessionId: segment.sessionId,
     segmentId: segment.segmentId,
-    sequence: segment.sequence,
-    status: segment.status
+    sequence: segment.sequence
   };
 }

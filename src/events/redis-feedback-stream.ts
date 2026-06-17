@@ -1,3 +1,7 @@
+/**
+ * Redis Stream을 활용하여 실시간 AI 피드백 이벤트를 송수신하는 클래스입니다.
+ * 초지연 처리가 필요한 실시간 분석 입력(Source)과 결과(Result) 스트림을 관리합니다.
+ */
 import {
   createClient,
   type RedisClientType
@@ -28,9 +32,9 @@ export interface FeedbackGeneratedEnvelope {
 
 export class RedisFeedbackStream implements FinalSegmentPublisher {
   private readonly client: RedisClientType;
-  // 같은 segment를 두 번 xadd하지 않도록 프로세스 내부에서 멱등성을 지킨다.
+  /** 프로세스 내부 멱등성 보장을 위해 기록된 세그먼트 ID 집합입니다. */
   private readonly publishedSegmentIds = new Set<string>();
-  // meetingId별 feedback-result consumer를 한 번씩만 붙인다.
+  /** 회의별 피드백 결과 수신을 위한 컨슈머 루프 제어 맵입니다. */
   private readonly consumers = new Map<
     string,
     { controller: AbortController; client: RedisClientType }
@@ -50,15 +54,17 @@ export class RedisFeedbackStream implements FinalSegmentPublisher {
     await this.client.connect();
   }
 
+  /** 
+   * [피드백 소스 발행] 확정된 자막 세그먼트를 AI 분석 입력 스트림에 추가합니다.
+   * XADD 명령을 사용하며, 메모리 관리를 위해 스트림 최대 길이를 제한(TRIM)합니다.
+   */
   async publishFinalSegment(
     segment: TranscriptSegment,
     _reason: FinalizationReason,
     correlationId: string
   ): Promise<void> {
-    if (this.publishedSegmentIds.has(segment.segmentId)) {
-      return;
-    }
-    // Redis Stream에는 FINALIZED segment만 넣는다.
+    if (this.publishedSegmentIds.has(segment.segmentId)) return;
+
     const envelope = createEventEnvelope(
       "meeting.feedback.segment.created",
       correlationId,
@@ -74,8 +80,9 @@ export class RedisFeedbackStream implements FinalSegmentPublisher {
         endedAtMs: segment.endedAtMs
       }
     );
+
     try {
-      // feedback-source stream은 실시간 입력용이므로 MAXLEN trim을 적용한다.
+      // Redis Stream에 메시지 적재 및 자동 길이 제한 적용
       const messageId = await this.client.xAdd(
         feedbackSourceStream(segment.meetingId),
         "*",
@@ -89,37 +96,29 @@ export class RedisFeedbackStream implements FinalSegmentPublisher {
         }
       );
       this.publishedSegmentIds.add(segment.segmentId);
-      this.logger.info(
-        {
-          ...publishLogContext(segment),
-          messageId
-        },
-        "meeting.feedback.segment.created added to Redis Stream"
-      );
+      this.logger.info({ segmentId: segment.segmentId, messageId }, "피드백 입력 스트림 적재 성공");
     } catch (error) {
-      this.logger.error(
-        {
-          ...publishLogContext(segment),
-          error: error instanceof Error ? error.message : String(error)
-        },
-        "meeting.feedback.segment.created Redis Stream publish failed"
-      );
+      this.logger.error({ error: (error as Error).message }, "피드백 스트림 발행 실패");
       throw error;
     }
   }
 
+  /** 
+   * [피드백 결과 구독] AI 서버가 생성한 분석 결과를 실시간으로 수신합니다.
+   * Redis Consumer Group을 생성하여 안정적인 메시지 분배를 보장합니다.
+   */
   async consumeFeedback(
     meetingId: string,
     handler: (event: FeedbackGeneratedEnvelope) => Promise<void>
   ): Promise<void> {
-    if (this.consumers.has(meetingId)) {
-      return;
-    }
-    // meeting 단위 consumer group을 만들어 feedback-result를 읽는다.
+    if (this.consumers.has(meetingId)) return;
+
     const stream = feedbackResultStream(meetingId);
     const consumerClient = this.client.duplicate();
     await consumerClient.connect();
+
     try {
+      // 컨슈머 그룹 생성 (이미 존재하는 경우 무시)
       await consumerClient.xGroupCreate(stream, this.consumerGroup, "0", {
         MKSTREAM: true
       });
@@ -132,37 +131,28 @@ export class RedisFeedbackStream implements FinalSegmentPublisher {
 
     const controller = new AbortController();
     this.consumers.set(meetingId, { controller, client: consumerClient });
-    // consumeLoop는 background task로 돌려 호출부를 블로킹하지 않는다.
-    void this.consumeLoop(
-      stream,
-      consumerClient,
-      controller.signal,
-      handler
-    );
+    
+    // 백그라운드에서 메시지 수신 루프 실행
+    void this.consumeLoop(stream, consumerClient, controller.signal, handler);
   }
 
   stopFeedbackConsumer(meetingId: string): void {
     const consumer = this.consumers.get(meetingId);
     consumer?.controller.abort();
-    if (consumer?.client.isOpen) {
-      void consumer.client.quit();
-    }
+    if (consumer?.client.isOpen) void consumer.client.quit();
     this.consumers.delete(meetingId);
   }
 
   async close(): Promise<void> {
     for (const consumer of this.consumers.values()) {
       consumer.controller.abort();
-      if (consumer.client.isOpen) {
-        await consumer.client.quit();
-      }
+      if (consumer.client.isOpen) await consumer.client.quit();
     }
     this.consumers.clear();
-    if (this.client.isOpen) {
-      await this.client.quit();
-    }
+    if (this.client.isOpen) await this.client.quit();
   }
 
+  /** [메시지 수신 루프] 주기적으로 새로운 피드백 이벤트를 읽어와 처리하고 확인(ACK)을 보냅니다. */
   private async consumeLoop(
     stream: string,
     client: RedisClientType,
@@ -171,50 +161,43 @@ export class RedisFeedbackStream implements FinalSegmentPublisher {
   ): Promise<void> {
     while (!signal.aborted && client.isOpen) {
       try {
-        // 새 메시지만 읽고, 처리 성공 후 ACK한다.
+        // 읽지 않은 새로운 메시지('>')를 블로킹 방식으로 대기
         const results = await client.xReadGroup(
           this.consumerGroup,
           this.consumerName,
           [{ key: stream, id: ">" }],
           { COUNT: 10, BLOCK: 1000 }
         );
+
         for (const result of results ?? []) {
           for (const message of result.messages) {
             const raw = message.message.event;
             if (!raw) {
-              // payload가 없으면 재시도해도 의미가 없으므로 바로 ACK한다.
               await client.xAck(stream, this.consumerGroup, message.id);
               continue;
             }
+
             const event = JSON.parse(raw) as FeedbackGeneratedEnvelope;
-            if (event.eventType !== "meeting.feedback.generated") {
-              // 예상한 결과 이벤트가 아니면 막지 말고 ACK 후 넘긴다.
-              await client.xAck(stream, this.consumerGroup, message.id);
-              continue;
+            if (event.eventType === "meeting.feedback.generated") {
+              await handler(event);
             }
-            await handler(event);
+            // 처리 완료 후 메시지 확인 처리
             await client.xAck(stream, this.consumerGroup, message.id);
           }
         }
       } catch (error) {
-        if (!signal.aborted) {
-          await delay(500);
-        }
+        if (!signal.aborted) await delay(500);
       }
     }
-    if (client.isOpen) {
-      await client.quit();
-    }
+    if (client.isOpen) await client.quit();
   }
 }
 
 export function feedbackSourceStream(meetingId: string): string {
-  // STT 서버가 finalized segment를 적재하는 입력 stream 이름이다.
   return `meeting:${meetingId}:feedback-source`;
 }
 
 export function feedbackResultStream(meetingId: string): string {
-  // AI 서버가 생성한 결과를 다시 읽는 응답 stream 이름이다.
   return `meeting:${meetingId}:feedback-result`;
 }
 
@@ -224,14 +207,4 @@ function isBusyGroupError(error: unknown): boolean {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function publishLogContext(segment: TranscriptSegment): Record<string, unknown> {
-  return {
-    meetingId: segment.meetingId,
-    sessionId: segment.sessionId,
-    segmentId: segment.segmentId,
-    sequence: segment.sequence,
-    status: segment.status
-  };
 }

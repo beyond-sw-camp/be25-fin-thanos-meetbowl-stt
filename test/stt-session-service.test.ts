@@ -41,7 +41,8 @@ function createDependencies(): SttSessionServiceDependencies {
       VAD_SILENCE_MS: 700,
       SEGMENT_NO_DELTA_TIMEOUT_MS: 1200,
       TRANSLATION_GRACE_MS: 500,
-      MAX_SEGMENT_DURATION_MS: 15000
+      MAX_SEGMENT_DURATION_MS: 15000,
+      TRACK_SWITCH_GRACE_MS: 450
     },
     rabbitPublisher: {
       async connect() {},
