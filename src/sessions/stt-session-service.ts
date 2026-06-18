@@ -49,17 +49,26 @@ interface SttSessionRecord {
 }
 
 export interface CreateSttSessionCommand {
+  /** STT를 붙일 대상 회의 ID입니다. */
   meetingId: string;
+  /** LiveKit room 이름입니다. meetingId와 1:1일 수도 있지만 운영 정책상 별도 문자열일 수 있습니다. */
   roomName: string;
+  /** 요청 흐름 추적용 correlation ID입니다. 없으면 서비스 내부에서 새로 발급합니다. */
   correlationId?: string;
 }
 
 export interface SttSessionServiceDependencies {
+  /** `.env`에서 읽어온 런타임 설정입니다. */
   config: AppConfig;
+  /** finalized transcript를 저장 경로로 넘기는 RabbitMQ publisher입니다. */
   rabbitPublisher: RabbitMqTranscriptPublisher;
+  /** 피드백 입력/결과용 Redis Stream 어댑터입니다. */
   feedbackStream: RedisFeedbackStream;
+  /** 번역 provider 팩토리입니다. */
   translationProvider: TranslationProvider;
+  /** 원문 transcription provider 팩토리입니다. */
   transcriptionProvider: TranscriptionProvider;
+  /** 세션/런타임 상태 로그를 남길 로거입니다. */
   logger: PipelineLogger;
 }
 
@@ -104,9 +113,18 @@ export class SttSessionService {
       return this.start(created.sessionId);
     }
 
-    // 1. 이미 정상 가동 중인 경우 재사용
-    if (record.status === "RUNNING" || record.status === "STARTING") {
+    // 1. 이미 정상 가동 중인 경우만 재사용한다.
+    // LiveKit room 연결이 끊긴 stale RUNNING 세션은 여기서 걸러내지 않으면
+    // FE는 room에 붙어 있어도 STT participant가 없어 DataChannel을 못 받게 된다.
+    if (
+      (record.status === "RUNNING" || record.status === "STARTING") &&
+      this.isRuntimeHealthy(record)
+    ) {
       return this.toView(record);
+    }
+
+    if (record.status === "RUNNING" || record.status === "STARTING") {
+      await this.discardRuntime(record);
     }
 
     // 2. 과거에 실패했거나 대상 회의실이 변경된 경우 강제 갱신 후 재시작
@@ -123,7 +141,13 @@ export class SttSessionService {
   /** [세션 실제 가동] LiveKit 런타임을 생성하고 외부 엔진 연동을 시작합니다. */
   async start(sessionId: string): Promise<SttSessionView> {
     const record = this.requireSession(sessionId);
-    if (record.status === "RUNNING") return this.toView(record);
+    if (record.status === "RUNNING" && this.isRuntimeHealthy(record)) {
+      return this.toView(record);
+    }
+
+    if (record.status === "RUNNING" || record.status === "STARTING") {
+      await this.discardRuntime(record);
+    }
 
     if (record.status !== "CREATED" && record.status !== "STOPPED") {
       throw new Error(`현재 상태(${record.status})에서는 세션을 시작할 수 없습니다.`);
@@ -144,8 +168,8 @@ export class SttSessionService {
       record.status = "RUNNING";
       return this.toView(record);
     } catch (error) {
+      await this.discardRuntime(record);
       record.status = "FAILED";
-      record.runtime = undefined;
       throw error;
     }
   }
@@ -203,6 +227,29 @@ export class SttSessionService {
       status: record.status,
       pipelineCount: record.runtime?.pipelineCount ?? 0
     };
+  }
+
+  /** RUNNING 표기만으로는 충분하지 않으므로 실제 room 연결 건강 상태까지 함께 확인합니다. */
+  private isRuntimeHealthy(record: SttSessionRecord): boolean {
+    return record.runtime?.isHealthy() ?? false;
+  }
+
+  /**
+   * stale runtime은 먼저 정리한 뒤 재시작해야, 끊긴 room 연결과 남아 있는 reader가
+   * 다음 ensure-started 요청에 영향을 주지 않는다.
+   */
+  private async discardRuntime(record: SttSessionRecord): Promise<void> {
+    const runtime = record.runtime;
+    record.runtime = undefined;
+    record.status = "STOPPED";
+    if (!runtime) {
+      return;
+    }
+    try {
+      await runtime.stop("SERVER_SHUTDOWN");
+    } catch {
+      // 이미 끊긴 room을 정리하는 경로에서는 추가 오류를 세션 재기동보다 우선하지 않는다.
+    }
   }
 }
 
