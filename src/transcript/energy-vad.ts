@@ -69,6 +69,7 @@ export class EnergyVad {
 function calculateRms(samples: Int16Array): number {
   if (samples.length === 0) return 0;
   
+  /** 모든 샘플의 제곱합입니다. 나중에 평균을 낸 뒤 제곱근을 취해 RMS를 계산합니다. */
   let sumSquares = 0;
   for (const sample of samples) {
     // 오디오 진폭을 -1.0 ~ 1.0 범위로 정규화한 뒤 제곱하여 합산

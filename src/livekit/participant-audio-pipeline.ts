@@ -17,27 +17,46 @@ import { SegmentController } from "../transcript/segment-controller.js";
 import type { FinalizationReason } from "../transcript/transcript-types.js";
 
 export interface PipelineLogger {
+  /** 정보성 로그를 남깁니다. 정상 흐름 추적과 성능 측정에 사용합니다. */
   info(values: Record<string, unknown>, message: string): void;
+  /** 경고 로그를 남깁니다. 기능은 계속 동작하지만 추적이 필요한 상태에 사용합니다. */
   warn(values: Record<string, unknown>, message: string): void;
+  /** 오류 로그를 남깁니다. provider 장애나 예외 상황 기록에 사용합니다. */
   error(values: Record<string, unknown>, message: string): void;
 }
 
 export interface ParticipantAudioPipelineOptions {
+  /** 현재 STT 세션이 속한 회의 ID입니다. 로그, 이벤트, 발행 payload의 공통 기준값입니다. */
   meetingId: string;
+  /** 회의 안에서 현재 STT runtime 인스턴스를 식별하는 세션 ID입니다. */
   sessionId: string;
+  /** FE -> BE -> STT까지 이어지는 요청 흐름 추적용 상관관계 ID입니다. */
   correlationId: string;
+  /** 회의 STT 런타임이 시작된 절대 시각입니다. 자막 startedAtMs 계산의 기준이 됩니다. */
   meetingStartedAtMs: number;
+  /** 새 자막 세그먼트가 열릴 때 사용할 순번을 공급하는 콜백입니다. */
   nextSequence: () => number;
+  /** 한국어/영어 번역 세션을 생성하는 translation provider 팩토리입니다. */
   translationProvider: TranslationProvider;
+  /** 원문 전사 세션을 생성하는 transcription provider 팩토리입니다. */
   transcriptionProvider: TranscriptionProvider;
+  /** 번역 세션을 실제로 붙일지 결정하는 플래그입니다. */
   enableTranslation: boolean;
+  /** LiveKit DataChannel로 streaming/final caption을 보내는 발행기입니다. */
   captionPublisher: CaptionPublisher;
+  /** finalized segment를 RabbitMQ/Redis Stream으로 내보내는 발행기입니다. */
   finalSegmentPublisher: FinalSegmentPublisher;
+  /** 이 값 이상인 프레임을 "실제 말소리"로 간주하는 RMS 임계값입니다. */
   rmsThreshold: number;
+  /** 마지막 목소리 이후 얼마 동안 조용해야 발화 종료로 볼지 정하는 시간(ms)입니다. */
   silenceMs: number;
+  /** delta가 한동안 오지 않을 때 세그먼트를 강제로 마감하기 위한 안전장치 시간(ms)입니다. */
   noDeltaTimeoutMs: number;
+  /** provider가 늦게 보내는 마지막 텍스트 조각을 흡수하기 위해 잠깐 기다리는 시간(ms)입니다. */
   translationGraceMs: number;
+  /** 한 세그먼트가 너무 길어질 때 강제로 끊는 최대 길이(ms)입니다. */
   maxSegmentDurationMs: number;
+  /** 파이프라인 내부 상태와 오류를 남길 로거입니다. */
   logger: PipelineLogger;
 }
 
@@ -53,9 +72,13 @@ export class ParticipantAudioPipeline {
   /** 핵심 전사(STT) 결과를 추출하기 위한 메인 전사 엔진 세션입니다. */
   private readonly transcriptionSession;
 
+  /** 번역 provider 연결이 현재 살아 있는지 나타냅니다. */
   private translationEnabled = false;
+  /** 원문 transcription provider 연결이 현재 살아 있는지 나타냅니다. */
   private transcriptionEnabled = false;
+  /** 세션 시작 이후 transcription provider에 넣은 오디오 프레임 개수입니다. */
   private transcriptionAudioFrames = 0;
+  /** 세션 시작 이후 translation provider에 넣은 오디오 프레임 개수입니다. */
   private translationAudioFrames = 0;
   /** 현재 발화가 시작된 시스템 시각을 기록하여 분석 지연 시간을 추적합니다. */
   private activeSpeechStartedAtMs?: number;
@@ -97,7 +120,12 @@ export class ParticipantAudioPipeline {
       }
     });
 
-    // OpenAI 엔진 핸들러 등록: 수신된 텍스트 조각들을 세그먼트 컨트롤러에 전달
+    /**
+     * 번역 세션 2개는 "원문 후보"와 "목표 언어 출력"을 각각 보조 데이터로 쌓습니다.
+     *
+     * 현재 화면 기준 원문 자막은 transcriptionSession이 우선이지만,
+     * transcription provider가 늦거나 실패할 때는 translation source delta가 보조 근거가 됩니다.
+     */
     this.koSession = options.translationProvider.createSession("ko", {
       onSourceDelta: (delta) =>
         this.segmentController.appendDelta("sourceCandidateKo", delta),
@@ -114,6 +142,10 @@ export class ParticipantAudioPipeline {
       onError: (error) => this.handleProviderError("en", error)
     });
 
+    /**
+     * 원문 transcription 세션은 최종적으로 화면에 보여줄 `text`의 1순위 데이터 소스입니다.
+     * delta는 빠른 STREAMING 표시용, completed는 더 정확한 FINALIZED 보정용으로 사용합니다.
+     */
     this.transcriptionSession = options.transcriptionProvider.createSession({
       onTranscriptDelta: (delta) => {
         this.segmentController.appendDelta("sourceTranscript", delta);
@@ -141,6 +173,11 @@ export class ParticipantAudioPipeline {
       }
 
       // 2. 보조 번역(Translation) 엔진 연결 시도
+      /**
+       * 번역은 두 경우에 활성화합니다.
+       * 1. 환경 설정상 번역 기능이 켜져 있는 경우
+       * 2. 원문 transcription 연결이 실패해 source candidate라도 받아야 하는 경우
+       */
       const shouldEnableTranslation = this.options.enableTranslation || !this.transcriptionEnabled;
       if (shouldEnableTranslation) {
         try {
@@ -188,6 +225,10 @@ export class ParticipantAudioPipeline {
     reason: FinalizationReason,
     shouldFlush = true
   ): Promise<void> {
+    /**
+     * source가 내려갈 때 transcription provider 쪽 버퍼는 먼저 commit합니다.
+     * 그래야 provider 내부에 쌓여 있던 마지막 음성 조각이 텍스트로 정리될 기회를 얻습니다.
+     */
     if (this.activeTrackSid && this.transcriptionEnabled) {
       this.transcriptionSession.commitAudio();
       await delay(this.options.translationGraceMs);
@@ -250,6 +291,11 @@ export class ParticipantAudioPipeline {
     }
 
     // 2. 활성화된 엔진 세션에 오디오 프레임 주입
+    /**
+     * 현재 구조는 track을 여러 개 provider에 보내지 않습니다.
+     * 상위 세션에서 "지금 가장 유효한 source"로 고른 프레임만 여기로 들어오고,
+     * 이 메서드는 그 프레임만 provider에 전달합니다.
+     */
     if (this.transcriptionEnabled) {
       this.transcriptionAudioFrames++;
       this.transcriptionSession.appendAudio(samples);
@@ -277,6 +323,7 @@ export class ParticipantAudioPipeline {
   }
 }
 
+/** provider가 마지막 텍스트를 정리할 시간을 주기 위한 짧은 대기 유틸리티입니다. */
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

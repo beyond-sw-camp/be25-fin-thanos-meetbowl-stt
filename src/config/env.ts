@@ -1,6 +1,8 @@
 import { z } from "zod";
 
+/** 공통적으로 재사용하는 "양의 정수" 스키마입니다. 시간(ms), 개수, 길이 제한 등에 사용합니다. */
 const positiveInteger = z.coerce.number().int().positive();
+/** `.env`에서 문자열로 들어오는 boolean 값을 안전하게 true/false로 바꾸는 스키마입니다. */
 const booleanString = z
   .enum(["true", "false"])
   .default("false")
@@ -94,6 +96,14 @@ const envSchema = z.object({
 
 export type AppConfig = z.infer<typeof envSchema>;
 
+/**
+ * `.env` 또는 프로세스 환경변수를 실제 런타임 설정 객체로 변환합니다.
+ *
+ * 이 함수는 단순히 값을 읽는 역할만 하지 않습니다.
+ * 1. 문자열을 숫자/boolean으로 변환하고
+ * 2. 누락된 값에는 기본값을 채우고
+ * 3. 필수값이 비어 있으면 서버 시작 자체를 막습니다.
+ */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const result = envSchema.safeParse(env);
   if (!result.success) {

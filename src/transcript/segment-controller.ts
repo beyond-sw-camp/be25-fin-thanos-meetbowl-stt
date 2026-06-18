@@ -18,16 +18,27 @@ import type {
 } from "./transcript-types.js";
 
 export interface SegmentControllerOptions {
+  /** 현재 세그먼트가 속한 회의 ID입니다. */
   meetingId: string;
+  /** 현재 세그먼트가 속한 STT 세션 ID입니다. */
   sessionId: string;
+  /** STT 세션 시작 절대 시각입니다. startedAtMs를 상대 시간으로 계산할 때 사용합니다. */
   meetingStartedAtMs: number;
+  /** delta가 오래 멈췄을 때 세그먼트를 마감하기 위한 타임아웃입니다. */
   noDeltaTimeoutMs: number;
+  /** provider가 늦게 보내는 마지막 텍스트를 흡수하기 위해 기다리는 시간입니다. */
   translationGraceMs: number;
+  /** 세그먼트가 너무 길어지는 것을 막기 위한 최대 지속 시간입니다. */
   maxSegmentDurationMs: number;
+  /** 세그먼트 순번을 외부에서 공급받는 콜백입니다. */
   nextSequence: () => number;
+  /** STREAMING/FINALIZED 자막을 LiveKit으로 발행하는 채널입니다. */
   captionPublisher: CaptionPublisher;
+  /** FINALIZED 세그먼트를 RabbitMQ/Redis Stream으로 발행하는 채널입니다. */
   finalSegmentPublisher: FinalSegmentPublisher;
+  /** 로그/이벤트 상관관계 추적용 ID입니다. */
   correlationId: string;
+  /** 세그먼트 오픈/파이널라이즈 같은 핵심 상태 전이를 기록하는 최소 로거입니다. */
   logger: Pick<PipelineLogger, "info">;
   onFinalizationError?: (
     error: Error,
@@ -37,10 +48,15 @@ export interface SegmentControllerOptions {
 }
 
 type TranscriptChannel =
+  /** 원문 transcription provider가 보내는 메인 delta 버퍼입니다. */
   | "sourceTranscript"
+  /** 한국어 번역 세션에서 역으로 관측한 source 후보 텍스트입니다. */
   | "sourceCandidateKo"
+  /** 영어 번역 세션에서 역으로 관측한 source 후보 텍스트입니다. */
   | "sourceCandidateEn"
+  /** 한국어 target 번역 결과 버퍼입니다. */
   | "koTargetOutput"
+  /** 영어 target 번역 결과 버퍼입니다. */
   | "enTargetOutput";
 
 export class SegmentController {
@@ -49,15 +65,18 @@ export class SegmentController {
   /** 세션 내 자막 순서를 보장하기 위한 순번입니다. */
   private sequence?: number;
   
-  // 상태 제어를 위한 각종 타이머
+  /** delta가 한동안 멈췄을 때 강제 finalize를 예약하는 타이머입니다. */
   private noDeltaTimer?: NodeJS.Timeout;
+  /** 세그먼트가 최대 길이를 넘었을 때 강제 분리를 예약하는 타이머입니다. */
   private maxDurationTimer?: NodeJS.Timeout;
+  /** speech stop 이후 provider의 마지막 응답을 기다리기 위한 grace 타이머입니다. */
   private graceTimer?: NodeJS.Timeout;
 
   /** 확정(Finalize) 프로세스가 중복 실행되지 않도록 방지하는 플래그입니다. */
   private finalizing = false;
   /** 다중 마이크 환경에서 동일 문장이 중복 발행되는 것을 막기 위한 최근 확정 텍스트 캐시입니다. */
   private lastFinalizedText = "";
+  /** 마지막 finalized 문장이 확정된 절대 시각입니다. 중복 억제 시간 창 계산에 사용합니다. */
   private lastFinalizedAtMs = 0;
 
   constructor(private readonly options: SegmentControllerOptions) {}
@@ -254,6 +273,7 @@ export class SegmentController {
   }
 
   private reset(): void {
+    // 현재 세그먼트를 완전히 비우지 않으면 다음 발화가 이전 버퍼를 이어받는 문제가 생긴다.
     this.active = undefined;
     this.sequence = undefined;
   }
