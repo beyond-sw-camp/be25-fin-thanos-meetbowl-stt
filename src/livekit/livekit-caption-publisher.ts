@@ -68,6 +68,24 @@ export class LiveKitCaptionPublisher implements CaptionPublisher {
     }
   }
 
+  /**
+   * FINALIZED 세그먼트가 후속 저장/분석 경로(RabbitMQ, Redis Stream)까지 성공적으로 전달된 뒤
+   * 프론트가 디버깅용으로 확인할 수 있도록 별도 이벤트를 보냅니다.
+   */
+  async publishFinalSegmentDelivered(segment: TranscriptSegment): Promise<void> {
+    await this.publish("segment.final.delivered", {
+      eventType: "segment.final.delivered",
+      meetingId: segment.meetingId,
+      sessionId: segment.sessionId,
+      segmentId: segment.segmentId,
+      sequence: segment.sequence,
+      startedAtMs: segment.startedAtMs,
+      endedAtMs: segment.endedAtMs ?? null,
+      deliveredAt: new Date().toISOString(),
+      transports: ["rabbitmq", "redis"]
+    });
+  }
+
   /** [피드백 발행] AI 분석 서버로부터 수신된 피드백 결과를 'feedback.generated' 토픽으로 전송합니다. */
   async publishFeedback(event: FeedbackGeneratedEnvelope): Promise<void> {
     await this.publish("feedback.generated", {
