@@ -90,6 +90,7 @@ X-Internal-Token: {internalToken}
 | Method | Endpoint | 설명 | 호출 주체 |
 |---|---|---|---|
 | POST | `/sessions` | STT 세션 생성 | meetbowl-be |
+| POST | `/sessions/ensure-started` | meeting 기준으로 STT 세션 생성 및 시작을 멱등하게 보장 | meetbowl-be |
 | POST | `/sessions/{sessionId}/start` | STT 세션 시작 | meetbowl-be/System |
 | POST | `/sessions/{sessionId}/stop` | STT 세션 종료 | meetbowl-be/System |
 | GET | `/sessions/{sessionId}` | STT 세션 상태 조회 | meetbowl-be |
@@ -122,6 +123,38 @@ X-Internal-Token: {internalToken}
   "message": null
 }
 ```
+
+---
+
+### POST `/sessions/ensure-started`
+
+#### Request
+
+```json
+{
+  "meetingId": "uuid",
+  "roomName": "livekit-room-name",
+  "recordingEnabled": false
+}
+```
+
+#### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "sessionId": "uuid",
+    "meetingId": "uuid",
+    "roomName": "livekit-room-name",
+    "status": "RUNNING",
+    "pipelineCount": 1
+  },
+  "message": null
+}
+```
+
+동일 `meetingId`로 같은 요청이 반복되면 기존 RUNNING 세션을 재사용한다. `meetbowl-be`는 회의 입장 시 이 API를 먼저 호출해 자막 세션을 준비한다.
 
 ---
 

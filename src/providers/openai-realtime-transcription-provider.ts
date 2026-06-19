@@ -1,3 +1,7 @@
+/**
+ * OpenAI Realtime API를 사용하여 실시간 음성 전사(Transcription)를 수행하는 프로바이더 클래스입니다.
+ * WebSocket을 통해 음성 데이터를 스트리밍하고 실시간으로 텍스트 델타를 수신합니다.
+ */
 import WebSocket, { type RawData } from "ws";
 
 import type {
@@ -8,9 +12,13 @@ import type {
 } from "./translation-provider.js";
 
 interface OpenAiEvent {
+  /** OpenAI 서버에서 정의한 이벤트 타입입니다. */
   type: string;
+  /** 실시간으로 생성된 자막 텍스트 조각입니다. */
   delta?: string;
+  /** 발화가 완료되어 확정된 전체 문장입니다. */
   transcript?: string;
+  /** 오류 발생 시 상세 정보를 포함하는 객체입니다. */
   error?: {
     message?: string;
   };
@@ -20,6 +28,7 @@ interface OpenAiEvent {
 export interface OpenAiRealtimeTranscriptionProviderOptions {
   apiKey: string;
   model: string;
+  /** 텍스트 생성 결과의 지연 시간 정책(minimal, low, medium 등)입니다. */
   delay: TranscriptionDelay;
   language?: string;
 }
@@ -31,14 +40,18 @@ export class OpenAiRealtimeTranscriptionProvider
     private readonly options: OpenAiRealtimeTranscriptionProviderOptions
   ) {}
 
+  /** 개별 참가자 트랙 처리를 위한 독립적인 전사 세션을 생성합니다. */
   createSession(
     handlers: TranscriptionSessionHandlers
   ): TranscriptionSession {
-    // session 객체는 연결/오디오 append/close를 캡슐화한다.
     return new OpenAiTranscriptionSession(this.options, handlers);
   }
 }
 
+/** 
+ * 실제 OpenAI 서버와 통신하는 런타임 세션 클래스입니다.
+ * WebSocket 생명주기 및 오디오 버퍼 관리를 담당합니다.
+ */
 class OpenAiTranscriptionSession implements TranscriptionSession {
   private socket?: WebSocket;
   private closed = false;
@@ -48,8 +61,10 @@ class OpenAiTranscriptionSession implements TranscriptionSession {
     private readonly handlers: TranscriptionSessionHandlers
   ) {}
 
+  /** 
+   * [엔진 연결] OpenAI Realtime WebSocket 서버에 접속하고 세션 설정을 동기화합니다.
+   */
   async connect(): Promise<void> {
-    // transcription 전용 realtime websocket을 열고 session.update를 먼저 보낸다.
     const url = new URL("wss://api.openai.com/v1/realtime");
     url.searchParams.set("intent", "transcription");
 
@@ -67,11 +82,7 @@ class OpenAiTranscriptionSession implements TranscriptionSession {
       };
       const handleInitialError = (error: Error) => {
         socket.off("open", handleOpen);
-        reject(
-          new Error(
-            `OpenAI transcription websocket failed for model=${this.options.model}: ${error.message}`
-          )
-        );
+        reject(new Error(`OpenAI 전사 엔진 연결 실패: ${error.message}`));
       };
       socket.once("open", handleOpen);
       socket.once("error", handleInitialError);
@@ -82,14 +93,11 @@ class OpenAiTranscriptionSession implements TranscriptionSession {
     socket.on("close", (code, reason) => {
       this.closed = true;
       if (code !== 1000) {
-        this.handlers.onError(
-          new Error(
-            `OpenAI transcription websocket closed code=${code} reason=${reason.toString() || "none"}`
-          )
-        );
+        this.handlers.onError(new Error(`OpenAI 연결 비정상 종료: ${code} (${reason})`));
       }
     });
 
+    // 세션 초기 설정 전송: 오디오 포맷 및 전사 지연 모델 구성
     socket.send(
       JSON.stringify({
         type: "session.update",
@@ -97,17 +105,11 @@ class OpenAiTranscriptionSession implements TranscriptionSession {
           type: "transcription",
           audio: {
             input: {
-              format: {
-                type: "audio/pcm",
-                rate: 24000
-              },
+              format: { type: "audio/pcm", rate: 24000 },
               transcription: {
-                // delay는 provider가 partial delta를 얼마나 빨리 내보낼지 제어한다.
                 model: this.options.model,
                 delay: this.options.delay,
-                ...(this.options.language
-                  ? { language: this.options.language }
-                  : {})
+                ...(this.options.language ? { language: this.options.language } : {})
               }
             }
           }
@@ -116,16 +118,16 @@ class OpenAiTranscriptionSession implements TranscriptionSession {
     );
   }
 
+  /** [오디오 데이터 전송] PCM 데이터를 Base64로 인코딩하여 서버에 버퍼링합니다. */
   appendAudio(samples: Int16Array): void {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    // PCM frame을 base64로 감싸 OpenAI websocket payload 형식에 맞춘다.
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+
     const audio = Buffer.from(
       samples.buffer,
       samples.byteOffset,
       samples.byteLength
     ).toString("base64");
+    
     this.socket.send(
       JSON.stringify({
         type: "input_audio_buffer.append",
@@ -134,24 +136,16 @@ class OpenAiTranscriptionSession implements TranscriptionSession {
     );
   }
 
+  /** [발화 마감] 현재까지의 오디오 버퍼를 커밋하여 최종 전사 결과를 요청합니다. */
   commitAudio(): void {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    // local VAD가 끝난 시점마다 commit해서 같은 발화를 다음 turn과 분리한다.
-    this.socket.send(
-      JSON.stringify({
-        type: "input_audio_buffer.commit"
-      })
-    );
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
   }
 
   async close(): Promise<void> {
     const socket = this.socket;
-    if (!socket || this.closed) {
-      return;
-    }
-    // open 상태면 닫힘 이벤트를 기다리고, 이미 닫힌 경우엔 즉시 반환한다.
+    if (!socket || this.closed) return;
+
     if (socket.readyState !== WebSocket.OPEN) {
       socket.close(1000);
       return;
@@ -169,27 +163,17 @@ class OpenAiTranscriptionSession implements TranscriptionSession {
     await closed;
   }
 
+  /** OpenAI로부터 수신된 원시 메시지를 해석하여 도메인 핸들러에 전달합니다. */
   private handleMessage(data: RawData): void {
     const event = parseEvent(data);
-    if (!event) {
-      return;
-    }
-    // delta/completed/error만 상위 pipeline에 전달하고 나머지는 무시한다.
-    debugOpenAiTranscriptionEvent(event);
-    if (
-      event.type === "conversation.item.input_audio_transcription.delta" &&
-      event.delta
-    ) {
+    if (!event) return;
+
+    if (event.type === "conversation.item.input_audio_transcription.delta" && event.delta) {
       this.handlers.onTranscriptDelta(event.delta);
-    } else if (
-      event.type === "conversation.item.input_audio_transcription.completed" &&
-      event.transcript
-    ) {
+    } else if (event.type === "conversation.item.input_audio_transcription.completed" && event.transcript) {
       this.handlers.onTranscriptCompleted(event.transcript);
     } else if (event.type === "error") {
-      this.handlers.onError(
-        new Error(event.error?.message ?? "OpenAI transcription session failed")
-      );
+      this.handlers.onError(new Error(event.error?.message ?? "OpenAI 내부 오류 발생"));
     }
   }
 }
@@ -200,36 +184,4 @@ function parseEvent(data: RawData): OpenAiEvent | undefined {
   } catch {
     return undefined;
   }
-}
-
-function debugOpenAiTranscriptionEvent(event: OpenAiEvent): void {
-  // 디버그 로그는 관심 이벤트만 골라 짧게 남긴다.
-  const interestingTypes = new Set([
-    "conversation.item.input_audio_transcription.delta",
-    "conversation.item.input_audio_transcription.completed",
-    "session.created",
-    "session.updated",
-    "error"
-  ]);
-
-  if (!interestingTypes.has(event.type)) {
-    return;
-  }
-
-  console.log(
-    JSON.stringify({
-      scope: "openai-realtime-transcription",
-      type: event.type,
-      delta:
-        typeof event.delta === "string" ? event.delta.slice(0, 120) : undefined,
-      transcript:
-        typeof event.transcript === "string"
-          ? event.transcript.slice(0, 120)
-          : undefined,
-      error:
-        event.type === "error"
-          ? event.error?.message ?? "unknown OpenAI error"
-          : undefined
-    })
-  );
 }

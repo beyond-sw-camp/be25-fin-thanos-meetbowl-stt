@@ -1,3 +1,7 @@
+/**
+ * OpenAI Realtime API를 통해 실시간 기계 번역(Translation)을 수행하는 프로바이더 클래스입니다.
+ * 한국어 또는 영어 중 지정된 대상 언어로의 스트리밍 번역 결과를 제공합니다.
+ */
 import WebSocket, { type RawData } from "ws";
 
 import type {
@@ -8,7 +12,9 @@ import type {
 } from "./translation-provider.js";
 
 interface OpenAiEvent {
+  /** OpenAI API 이벤트 타입입니다. */
   type: string;
+  /** 입력된 원문 또는 출력된 번역문의 텍스트 조각입니다. */
   delta?: string;
   error?: {
     message?: string;
@@ -25,11 +31,15 @@ export class OpenAiRealtimeTranslationProvider
 {
   constructor(private readonly options: OpenAiTranslationProviderOptions) {}
 
+  /** 
+   * [세션 생성] 특정 타겟 언어(ko/en)를 처리하기 위한 번역 세션을 생성합니다.
+   * @param targetLanguage 결과 텍스트가 표시될 언어
+   * @param handlers 실시간 데이터 및 에러 처리를 위한 콜백 집합
+   */
   createSession(
     targetLanguage: TranslationTargetLanguage,
     handlers: TranslationSessionHandlers
   ): TranslationSession {
-    // 각 target language별로 독립된 websocket session을 만든다.
     return new OpenAiTranslationSession(
       this.options,
       targetLanguage,
@@ -38,6 +48,9 @@ export class OpenAiRealtimeTranslationProvider
   }
 }
 
+/** 
+ * 실시간 번역 세션을 관리하는 내부 구현 클래스입니다. 
+ */
 class OpenAiTranslationSession implements TranslationSession {
   private socket?: WebSocket;
   private closed = false;
@@ -48,8 +61,8 @@ class OpenAiTranslationSession implements TranslationSession {
     private readonly handlers: TranslationSessionHandlers
   ) {}
 
+  /** [엔진 연결] 번역 엔진에 접속하고 타겟 언어 설정을 주입합니다. */
   async connect(): Promise<void> {
-    // translation websocket을 열고 target language를 session.update로 전달한다.
     const url = new URL("wss://api.openai.com/v1/realtime/translations");
     url.searchParams.set("model", this.options.model);
 
@@ -75,35 +88,31 @@ class OpenAiTranslationSession implements TranslationSession {
 
     socket.on("message", (data) => this.handleMessage(data));
     socket.on("error", (error) => this.handlers.onError(error));
-    socket.on("close", () => {
-      this.closed = true;
-    });
+    socket.on("close", () => { this.closed = true; });
 
+    // 번역 타겟 언어 구성 전송
     socket.send(
       JSON.stringify({
         type: "session.update",
         session: {
           audio: {
-            output: {
-              // targetLanguage는 한국어/영어 전환 output의 기준 언어가 된다.
-              language: this.targetLanguage
-            }
+            output: { language: this.targetLanguage }
           }
         }
       })
     );
   }
 
+  /** [오디오 데이터 전송] 번역 분석을 위해 PCM 데이터를 바이너리로 전송합니다. */
   appendAudio(samples: Int16Array): void {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    // audio frame은 transcription provider와 동일하게 base64 PCM으로 전달한다.
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+
     const audio = Buffer.from(
       samples.buffer,
       samples.byteOffset,
       samples.byteLength
     ).toString("base64");
+    
     this.socket.send(
       JSON.stringify({
         type: "session.input_audio_buffer.append",
@@ -114,10 +123,8 @@ class OpenAiTranslationSession implements TranslationSession {
 
   async close(): Promise<void> {
     const socket = this.socket;
-    if (!socket || this.closed) {
-      return;
-    }
-    // session.close를 먼저 보내고 server가 닫힌 뒤 websocket을 종료한다.
+    if (!socket || this.closed) return;
+
     if (socket.readyState !== WebSocket.OPEN) {
       socket.close();
       return;
@@ -144,23 +151,17 @@ class OpenAiTranslationSession implements TranslationSession {
     socket.close();
   }
 
+  /** 수신된 이벤트를 구분하여 원문 후보(Source)와 번역 결과(Translation)를 파이프라인에 전달합니다. */
   private handleMessage(data: RawData): void {
     const event = parseEvent(data);
-    if (!event) {
-      return;
-    }
-    // source delta와 translation delta만 상위 pipeline으로 전달한다.
+    if (!event) return;
+
     if (event.type === "session.input_transcript.delta" && event.delta) {
       this.handlers.onSourceDelta(event.delta);
-    } else if (
-      event.type === "session.output_transcript.delta" &&
-      event.delta
-    ) {
+    } else if (event.type === "session.output_transcript.delta" && event.delta) {
       this.handlers.onTranslationDelta(event.delta);
     } else if (event.type === "error") {
-      this.handlers.onError(
-        new Error(event.error?.message ?? "OpenAI translation session failed")
-      );
+      this.handlers.onError(new Error(event.error?.message ?? "OpenAI 번역 엔진 오류"));
     }
   }
 }

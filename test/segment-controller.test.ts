@@ -16,6 +16,9 @@ test("publishes streaming updates and one finalized segment", async () => {
     maxSegmentDurationMs: 1000,
     nextSequence: () => 0,
     correlationId: "correlation-id",
+    logger: {
+      info() {}
+    },
     captionPublisher: {
       async publishCaption(segment) {
         captions.push(segment);
@@ -67,6 +70,9 @@ test("retains the active segment when final publishing fails and retries on flus
     maxSegmentDurationMs: 1000,
     nextSequence: () => 3,
     correlationId: "correlation-id",
+    logger: {
+      info() {}
+    },
     captionPublisher: {
       async publishCaption() {}
     },
@@ -94,4 +100,162 @@ test("retains the active segment when final publishing fails and retries on flus
   assert.equal(controller.hasActiveSegment(), false);
   assert.equal(attempts, 2);
   assert.equal(publishedSegmentIds.length, 1);
+});
+
+test("fills endedAtMs when finalized without stopSpeech", async () => {
+  const finalized: TranscriptSegment[] = [];
+  const controller = new SegmentController({
+    meetingId: "meeting-id",
+    sessionId: "session-id",
+    meetingStartedAtMs: 1000,
+    noDeltaTimeoutMs: 1000,
+    translationGraceMs: 5,
+    maxSegmentDurationMs: 1000,
+    nextSequence: () => 7,
+    correlationId: "correlation-id",
+    logger: {
+      info() {}
+    },
+    captionPublisher: {
+      async publishCaption() {}
+    },
+    finalSegmentPublisher: {
+      async publishFinalSegment(segment) {
+        finalized.push(segment);
+      }
+    }
+  });
+
+  controller.startSpeech(1100);
+  controller.appendDelta("sourceTranscript", "끝나지 않은 문장", 1110);
+  await controller.flush("MANUAL_FLUSH");
+
+  assert.equal(finalized.length, 1);
+  assert.equal(typeof finalized[0]?.endedAtMs, "number");
+  assert.ok((finalized[0]?.endedAtMs ?? 0) >= (finalized[0]?.startedAtMs ?? 0));
+});
+
+test("trims overlapping prefix from the next finalized segment", async () => {
+  const finalized: TranscriptSegment[] = [];
+  let sequence = 0;
+  const controller = new SegmentController({
+    meetingId: "meeting-id",
+    sessionId: "session-id",
+    meetingStartedAtMs: 1000,
+    noDeltaTimeoutMs: 5,
+    translationGraceMs: 5,
+    maxSegmentDurationMs: 1000,
+    nextSequence: () => sequence++,
+    correlationId: "correlation-id",
+    logger: {
+      info() {}
+    },
+    captionPublisher: {
+      async publishCaption() {}
+    },
+    finalSegmentPublisher: {
+      async publishFinalSegment(segment) {
+        finalized.push(segment);
+      }
+    }
+  });
+
+  controller.startSpeech(1100);
+  controller.appendDelta(
+    "sourceTranscript",
+    "이번 주 액션 아이템을 검토하겠습니다",
+    1110
+  );
+  controller.stopSpeech(1200);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  controller.startSpeech(1300);
+  controller.appendDelta(
+    "sourceTranscript",
+    "액션 아이템을 검토하겠습니다 그리고 일정도 공유하겠습니다",
+    1310
+  );
+  controller.stopSpeech(1400);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(finalized.length, 2);
+  assert.equal(finalized[1]?.text, "그리고 일정도 공유하겠습니다");
+});
+
+test("drops a fully overlapped finalized segment", async () => {
+  const finalized: TranscriptSegment[] = [];
+  let sequence = 0;
+  const controller = new SegmentController({
+    meetingId: "meeting-id",
+    sessionId: "session-id",
+    meetingStartedAtMs: 1000,
+    noDeltaTimeoutMs: 5,
+    translationGraceMs: 5,
+    maxSegmentDurationMs: 1000,
+    nextSequence: () => sequence++,
+    correlationId: "correlation-id",
+    logger: {
+      info() {}
+    },
+    captionPublisher: {
+      async publishCaption() {}
+    },
+    finalSegmentPublisher: {
+      async publishFinalSegment(segment) {
+        finalized.push(segment);
+      }
+    }
+  });
+
+  controller.startSpeech(1100);
+  controller.appendDelta("sourceTranscript", "안녕하세요 오늘 일정 공유드리겠습니다", 1110);
+  controller.stopSpeech(1200);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  controller.startSpeech(1300);
+  controller.appendDelta("sourceTranscript", "오늘 일정 공유드리겠습니다", 1310);
+  controller.stopSpeech(1400);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(finalized.length, 1);
+  assert.equal(finalized[0]?.text, "안녕하세요 오늘 일정 공유드리겠습니다");
+});
+
+test("drops a near-duplicate finalized segment with minor wording differences", async () => {
+  const finalized: TranscriptSegment[] = [];
+  let sequence = 0;
+  const controller = new SegmentController({
+    meetingId: "meeting-id",
+    sessionId: "session-id",
+    meetingStartedAtMs: 1000,
+    noDeltaTimeoutMs: 5,
+    translationGraceMs: 5,
+    maxSegmentDurationMs: 1000,
+    nextSequence: () => sequence++,
+    correlationId: "correlation-id",
+    logger: {
+      info() {}
+    },
+    captionPublisher: {
+      async publishCaption() {}
+    },
+    finalSegmentPublisher: {
+      async publishFinalSegment(segment) {
+        finalized.push(segment);
+      }
+    }
+  });
+
+  controller.startSpeech(1100);
+  controller.appendDelta("sourceTranscript", "오늘 회의 일정을 먼저 공유하겠습니다", 1110);
+  controller.stopSpeech(1200);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  controller.startSpeech(1800);
+  controller.appendDelta("sourceTranscript", "오늘 회의 일정 먼저 공유하겠습니다", 1810);
+  controller.stopSpeech(1900);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(finalized.length, 1);
+  assert.equal(finalized[0]?.text, "오늘 회의 일정을 먼저 공유하겠습니다");
 });
