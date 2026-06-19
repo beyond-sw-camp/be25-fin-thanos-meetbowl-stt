@@ -63,6 +63,8 @@ export class RedisFeedbackStream implements FinalSegmentPublisher {
     _reason: FinalizationReason,
     correlationId: string
   ): Promise<void> {
+    // 인증 사용자가 없는 Room에서는 권한 기반 피드백 audience를 만들 수 없다.
+    if (segment.participantUserIds.length === 0) return;
     if (this.publishedSegmentIds.has(segment.segmentId)) return;
 
     const envelope = createEventEnvelope(

@@ -1,0 +1,35 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  LiveKitParticipantRegistry,
+  userIdFromParticipantIdentity
+} from "../src/livekit/livekit-participant-registry.js";
+
+const USER_A = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
+const USER_B = "4dd5adca-71ba-4204-a91f-e50b29bb83b9";
+
+test("extracts a UUID from a BE-issued user identity", () => {
+  assert.equal(userIdFromParticipantIdentity(`user-${USER_A}`), USER_A);
+});
+
+test("ignores guest, server, and malformed identities", () => {
+  assert.equal(userIdFromParticipantIdentity("guest-123"), undefined);
+  assert.equal(userIdFromParticipantIdentity("meetbowl-stt-session"), undefined);
+  assert.equal(userIdFromParticipantIdentity("user-not-a-uuid"), undefined);
+});
+
+test("tracks current authenticated users and returns a stable snapshot", () => {
+  const registry = new LiveKitParticipantRegistry();
+
+  assert.equal(registry.add(`user-${USER_B}`), true);
+  assert.equal(registry.add("guest-123"), false);
+  assert.equal(registry.add(`user-${USER_A}`), true);
+  assert.deepEqual(registry.snapshotUserIds(), [USER_A, USER_B]);
+
+  registry.remove(`user-${USER_A}`);
+  assert.deepEqual(registry.snapshotUserIds(), [USER_B]);
+
+  registry.clear();
+  assert.deepEqual(registry.snapshotUserIds(), []);
+});

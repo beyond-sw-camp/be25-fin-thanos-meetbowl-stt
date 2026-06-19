@@ -11,6 +11,7 @@ function segment(
     segmentId: "segment-id",
     meetingId: "meeting-id",
     sessionId: "session-id",
+    organizationId: "organization-id",
     startedAtMs: 0,
     sourceTranscript: "",
     sourceCandidateKo: "",

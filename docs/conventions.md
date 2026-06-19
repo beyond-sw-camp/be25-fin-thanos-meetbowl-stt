@@ -275,6 +275,10 @@ Redis Stream을 장기 저장소로 사용하지 않는다.
 
 Finalized segment는 한 건씩 `meeting.feedback.segment.created`로 발행한다.
 AI 피드백용 rolling window는 `meetbowl-ai`가 구성한다.
+segment의 `participantUserIds`는 LiveKit Room의 현재 `user-{userId}` identity에서
+추출하며 Guest와 server participant는 제외한다.
+
+AI 결과는 `audienceUserIds`와 현재 인증 사용자 identity의 교집합에만 전달한다.
 
 ---
 

@@ -10,6 +10,8 @@ test("publishes streaming updates and one finalized segment", async () => {
   const controller = new SegmentController({
     meetingId: "meeting-id",
     sessionId: "session-id",
+    organizationId: "organization-id",
+    getParticipantUserIds: () => ["participant-id"],
     meetingStartedAtMs: 1000,
     noDeltaTimeoutMs: 5,
     translationGraceMs: 5,
@@ -64,6 +66,8 @@ test("retains the active segment when final publishing fails and retries on flus
   const controller = new SegmentController({
     meetingId: "meeting-id",
     sessionId: "session-id",
+    organizationId: "organization-id",
+    getParticipantUserIds: () => ["participant-id"],
     meetingStartedAtMs: 1000,
     noDeltaTimeoutMs: 1000,
     translationGraceMs: 1000,
@@ -107,6 +111,8 @@ test("fills endedAtMs when finalized without stopSpeech", async () => {
   const controller = new SegmentController({
     meetingId: "meeting-id",
     sessionId: "session-id",
+    organizationId: "organization-id",
+    getParticipantUserIds: () => ["participant-id"],
     meetingStartedAtMs: 1000,
     noDeltaTimeoutMs: 1000,
     translationGraceMs: 5,
@@ -135,12 +141,52 @@ test("fills endedAtMs when finalized without stopSpeech", async () => {
   assert.ok((finalized[0]?.endedAtMs ?? 0) >= (finalized[0]?.startedAtMs ?? 0));
 });
 
+test("captures participant user IDs at finalization time", async () => {
+  const finalized: TranscriptSegment[] = [];
+  let participantUserIds = ["participant-a"];
+  const controller = new SegmentController({
+    meetingId: "meeting-id",
+    sessionId: "session-id",
+    organizationId: "organization-id",
+    getParticipantUserIds: () => [...participantUserIds],
+    meetingStartedAtMs: 1000,
+    noDeltaTimeoutMs: 1000,
+    translationGraceMs: 1000,
+    maxSegmentDurationMs: 1000,
+    nextSequence: () => 8,
+    correlationId: "correlation-id",
+    logger: {
+      info() {}
+    },
+    captionPublisher: {
+      async publishCaption() {}
+    },
+    finalSegmentPublisher: {
+      async publishFinalSegment(segment) {
+        finalized.push(segment);
+      }
+    }
+  });
+
+  controller.startSpeech(1100);
+  controller.appendDelta("sourceTranscript", "참가자 변경 후 확정", 1110);
+  participantUserIds = ["participant-a", "participant-b"];
+  await controller.flush("MANUAL_FLUSH");
+
+  assert.deepEqual(finalized[0]?.participantUserIds, [
+    "participant-a",
+    "participant-b"
+  ]);
+});
+
 test("trims overlapping prefix from the next finalized segment", async () => {
   const finalized: TranscriptSegment[] = [];
   let sequence = 0;
   const controller = new SegmentController({
     meetingId: "meeting-id",
     sessionId: "session-id",
+    organizationId: "organization-id",
+    getParticipantUserIds: () => ["participant-id"],
     meetingStartedAtMs: 1000,
     noDeltaTimeoutMs: 5,
     translationGraceMs: 5,
@@ -188,6 +234,8 @@ test("drops a fully overlapped finalized segment", async () => {
   const controller = new SegmentController({
     meetingId: "meeting-id",
     sessionId: "session-id",
+    organizationId: "organization-id",
+    getParticipantUserIds: () => ["participant-id"],
     meetingStartedAtMs: 1000,
     noDeltaTimeoutMs: 5,
     translationGraceMs: 5,
@@ -227,6 +275,8 @@ test("drops a near-duplicate finalized segment with minor wording differences", 
   const controller = new SegmentController({
     meetingId: "meeting-id",
     sessionId: "session-id",
+    organizationId: "organization-id",
+    getParticipantUserIds: () => ["participant-id"],
     meetingStartedAtMs: 1000,
     noDeltaTimeoutMs: 5,
     translationGraceMs: 5,

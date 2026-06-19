@@ -28,6 +28,7 @@ import type {
 } from "../providers/translation-provider.js";
 import type { FinalizationReason } from "../transcript/transcript-types.js";
 import { LiveKitCaptionPublisher } from "./livekit-caption-publisher.js";
+import { LiveKitParticipantRegistry } from "./livekit-participant-registry.js";
 import {
   ParticipantAudioPipeline,
   type PipelineLogger
@@ -42,7 +43,6 @@ export interface LiveKitMeetingSessionOptions {
   sessionId: string;
   /** 접속해야 하는 LiveKit room 이름입니다. */
   organizationId: string;
-  participantUserIds: string[];
   roomName: string;
   /** 요청/이벤트 흐름 추적용 상관관계 ID입니다. */
   correlationId: string;
@@ -67,6 +67,8 @@ export class LiveKitMeetingSession {
   private readonly trackCandidates = new Map<string, TrackCandidate>();
   /** 각 원격 오디오 트랙마다 유지되는 background reader 상태입니다. */
   private readonly trackReaders = new Map<string, TrackReaderState>();
+  /** BE가 발급한 user-{UUID} identity만 보관하는 현재 Room 인증 사용자 registry입니다. */
+  private readonly participantRegistry = new LiveKitParticipantRegistry();
   /** 새 세그먼트가 열릴 때마다 0부터 증가하는 회의 내 자막 순번입니다. */
   private sequence = 0;
   /** STT runtime이 실제로 start된 절대 시각입니다. 자막 상대시간 기준점입니다. */
@@ -117,9 +119,13 @@ export class LiveKitMeetingSession {
      * Room에서 발생하는 트랙 발행, 구독, 화자 변경 이벤트를 실시간으로 처리합니다.
      */
     this.room
+      .on(RoomEvent.ParticipantConnected, (participant) => {
+        this.participantRegistry.add(participant.identity);
+      })
       .on(
         RoomEvent.TrackPublished,
         (publication: RemoteTrackPublication, participant: RemoteParticipant) => {
+          this.participantRegistry.add(participant.identity);
           void this.ensurePublicationSubscribed(publication, participant);
         }
       )
@@ -130,6 +136,7 @@ export class LiveKitMeetingSession {
           publication: RemoteTrackPublication,
           participant: RemoteParticipant
         ) => {
+          this.participantRegistry.add(participant.identity);
           void this.attachTrack(track, publication, participant);
         }
       )
@@ -150,6 +157,7 @@ export class LiveKitMeetingSession {
         void this.handleActiveSpeakersChanged(participants);
       })
       .on(RoomEvent.ParticipantDisconnected, (participant) => {
+        this.participantRegistry.remove(participant.identity);
         void this.detachParticipant(participant.identity);
       })
       .on(RoomEvent.Reconnecting, () => {
@@ -193,7 +201,8 @@ export class LiveKitMeetingSession {
     });
     this.connectionHealthy = true;
 
-    // 6. 기존 접속자들의 트랙 상태 동기화 및 기본 트랙 연결 시도
+    // 6. 기존 접속자 identity와 트랙 상태 동기화 및 기본 트랙 연결 시도
+    this.syncExistingParticipants();
     await this.syncExistingRemoteAudioPublications();
     await this.ensureDefaultTrackAttached();
     
@@ -221,6 +230,7 @@ export class LiveKitMeetingSession {
       // 진행 중인 마지막 세그먼트를 확정하고 파이프라인 중단
       await pipeline?.stop(reason);
     } finally {
+      this.participantRegistry.clear();
       // LiveKit Room 연결 해제
       await this.room.disconnect();
       this.startedAtMs = undefined;
@@ -254,7 +264,7 @@ export class LiveKitMeetingSession {
       meetingId: this.options.meetingId,
       sessionId: this.options.sessionId,
       organizationId: this.options.organizationId,
-      participantUserIds: this.options.participantUserIds,
+      getParticipantUserIds: () => this.participantRegistry.snapshotUserIds(),
       correlationId: this.options.correlationId,
       meetingStartedAtMs: this.startedAtMs,
       nextSequence: () => this.sequence++,
@@ -273,6 +283,13 @@ export class LiveKitMeetingSession {
       translationGraceMs: this.options.config.TRANSLATION_GRACE_MS,
       maxSegmentDurationMs: this.options.config.MAX_SEGMENT_DURATION_MS
     });
+  }
+
+  /** Room 접속 이전부터 존재하던 인증 참가자를 registry에 반영합니다. */
+  private syncExistingParticipants(): void {
+    for (const participant of this.room.remoteParticipants.values()) {
+      this.participantRegistry.add(participant.identity);
+    }
   }
 
   /** 이미 발행된 오디오 트랙 정보가 누락되지 않도록 현재 Room 상태와 동기화합니다. */

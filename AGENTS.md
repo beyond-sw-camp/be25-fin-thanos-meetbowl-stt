@@ -80,6 +80,7 @@ Final Transcript:
 - 영구 저장은 `meetbowl-be` 담당
 - AI 피드백 입력은 finalized segment 기반 `meeting.feedback.segment.created` Redis Stream 이벤트를 사용
 - AI 피드백용 rolling window는 구성하지 않으며 `meetbowl-ai`가 meeting별로 구성
+- `participantUserIds`는 LiveKit Room의 현재 `user-{userId}` identity에서 추출하며 Guest와 server participant는 제외
 
 ---
 
@@ -120,6 +121,10 @@ meeting.feedback.generated
 ```
 
 임의 이벤트 추가 금지.
+
+`meeting.feedback.generated`는 payload의 `audienceUserIds`와 현재 LiveKit Room의 인증
+사용자 identity를 대조한 뒤 일치하는 대상에게만 DataChannel로 전달한다. 분석 이후 새로
+입장한 사용자와 Guest에게 기존 피드백을 전달하지 않는다.
 
 ---
 
