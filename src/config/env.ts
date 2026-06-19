@@ -65,22 +65,22 @@ const envSchema = z.object({
    * VAD(음성 활동 감지) 임계값입니다. 
    * 이 값보다 에너지가 작으면 무음으로 간주합니다. (0.0 ~ 1.0)
    */
-  VAD_RMS_THRESHOLD: z.coerce.number().min(0).max(1).default(0.003),
+  VAD_RMS_THRESHOLD: z.coerce.number().min(0).max(1).default(0.008),
   /**
    * 발화 종료 판정 무음 시간입니다. 
    * 마지막 음성 감지 후 이 시간만큼 조용하면 한 문장이 끝난 것으로 봅니다.
    */
-  VAD_SILENCE_MS: positiveInteger.default(30),
+  VAD_SILENCE_MS: positiveInteger.default(180),
   /**
    * 엔진 응답 타임아웃입니다. 
    * 텍스트 델타가 오지 않으면서 무음인 상태가 지속되면 세그먼트를 강제 마감합니다.
    */
-  SEGMENT_NO_DELTA_TIMEOUT_MS: positiveInteger.default(1200),
+  SEGMENT_NO_DELTA_TIMEOUT_MS: positiveInteger.default(700),
   /**
    * 번역/전사 결과 동기화 유예 시간입니다. 
    * 최종 확정 전 늦게 도착하는 텍스트 조각들을 흡수하기 위해 대기합니다.
    */
-  TRANSLATION_GRACE_MS: positiveInteger.default(500),
+  TRANSLATION_GRACE_MS: positiveInteger.default(180),
   /**
    * 한 세그먼트(문장)의 최대 지속 시간입니다. - 15초
    * 발화가 너무 길어지면 자막 가독성을 위해 이 시간 주기로 문장을 강제 분리합니다.
@@ -91,7 +91,7 @@ const envSchema = z.object({
    * Active Speaker가 바뀌었을 때 트랙을 즉시 바꾸지 않고 대기하여 짧은 잡음으로 인한 흔들림을 방지합니다.
    * 너무 짧으면 자막이 자주 쪼개지고, 너무 길면 다른 화자의 시작을 놓칠 수 있습니다.
    */
-  TRACK_SWITCH_GRACE_MS: positiveInteger.default(10)
+  TRACK_SWITCH_GRACE_MS: positiveInteger.default(120)
 });
 
 export type AppConfig = z.infer<typeof envSchema>;
