@@ -31,6 +31,8 @@ export interface ParticipantAudioPipelineOptions {
   /** 회의 안에서 현재 STT runtime 인스턴스를 식별하는 세션 ID입니다. */
   sessionId: string;
   /** FE -> BE -> STT까지 이어지는 요청 흐름 추적용 상관관계 ID입니다. */
+  organizationId: string;
+  participantUserIds: string[];
   correlationId: string;
   /** 회의 STT 런타임이 시작된 절대 시각입니다. 자막 startedAtMs 계산의 기준이 됩니다. */
   meetingStartedAtMs: number;
@@ -97,6 +99,8 @@ export class ParticipantAudioPipeline {
     this.segmentController = new SegmentController({
       meetingId: options.meetingId,
       sessionId: options.sessionId,
+      organizationId: options.organizationId,
+      participantUserIds: options.participantUserIds,
       meetingStartedAtMs: options.meetingStartedAtMs,
       noDeltaTimeoutMs: options.noDeltaTimeoutMs,
       translationGraceMs: options.translationGraceMs,

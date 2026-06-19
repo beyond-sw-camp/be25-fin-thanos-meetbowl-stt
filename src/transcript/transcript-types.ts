@@ -32,6 +32,8 @@ export interface TranscriptSegment {
   meetingId: string;
   sessionId: string;
   /** 세션 내 자막 순서를 나타내는 인덱스 */
+  organizationId: string;
+  participantUserIds: string[];
   sequence: number;
   /** 회의 시작 시점 대비 발화 시작 오프셋 (ms) */
   startedAtMs: number;
@@ -62,6 +64,8 @@ export interface ActiveTranscriptSegment {
   segmentId: string;
   meetingId: string;
   sessionId: string;
+  organizationId: string;
+  participantUserIds: string[];
   startedAtMs: number;
   startedAtEpochMs?: number;
   endedAtMs?: number;

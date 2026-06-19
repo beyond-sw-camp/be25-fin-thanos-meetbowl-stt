@@ -33,6 +33,8 @@ export interface SegmentControllerOptions {
   /** 현재 세그먼트가 속한 STT 세션 ID입니다. */
   sessionId: string;
   /** STT 세션 시작 절대 시각입니다. startedAtMs를 상대 시간으로 계산할 때 사용합니다. */
+  organizationId: string;
+  participantUserIds: string[];
   meetingStartedAtMs: number;
   /** delta가 오래 멈췄을 때 세그먼트를 마감하기 위한 타임아웃입니다. */
   noDeltaTimeoutMs: number;
@@ -115,6 +117,8 @@ export class SegmentController {
       segmentId: randomUUID(),
       meetingId: this.options.meetingId,
       sessionId: this.options.sessionId,
+      organizationId: this.options.organizationId,
+      participantUserIds: this.options.participantUserIds,
       startedAtMs: Math.max(0, nowMs - this.options.meetingStartedAtMs),
       startedAtEpochMs: nowMs,
       sourceTranscript: "",
@@ -422,6 +426,8 @@ export class SegmentController {
       segmentId: active.segmentId,
       meetingId: active.meetingId,
       sessionId: active.sessionId,
+      organizationId: active.organizationId,
+      participantUserIds: active.participantUserIds,
       sequence: this.sequence,
       startedAtMs: active.startedAtMs,
       startedAtEpochMs: active.startedAtEpochMs,

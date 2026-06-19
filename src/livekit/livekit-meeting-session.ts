@@ -41,6 +41,8 @@ export interface LiveKitMeetingSessionOptions {
   /** 현재 STT runtime을 식별하는 세션 ID입니다. */
   sessionId: string;
   /** 접속해야 하는 LiveKit room 이름입니다. */
+  organizationId: string;
+  participantUserIds: string[];
   roomName: string;
   /** 요청/이벤트 흐름 추적용 상관관계 ID입니다. */
   correlationId: string;
@@ -251,6 +253,8 @@ export class LiveKitMeetingSession {
     return new ParticipantAudioPipeline({
       meetingId: this.options.meetingId,
       sessionId: this.options.sessionId,
+      organizationId: this.options.organizationId,
+      participantUserIds: this.options.participantUserIds,
       correlationId: this.options.correlationId,
       meetingStartedAtMs: this.startedAtMs,
       nextSequence: () => this.sequence++,

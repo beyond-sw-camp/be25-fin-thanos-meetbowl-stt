@@ -33,6 +33,7 @@ export type SttSessionStatus =
 export interface SttSessionView {
   sessionId: string;
   meetingId: string;
+  organizationId: string;
   roomName: string;
   status: SttSessionStatus;
   pipelineCount: number;
@@ -42,6 +43,8 @@ export interface SttSessionView {
 interface SttSessionRecord {
   sessionId: string;
   meetingId: string;
+  organizationId: string;
+  participantUserIds: string[];
   roomName: string;
   correlationId: string;
   status: SttSessionStatus;
@@ -52,6 +55,8 @@ export interface CreateSttSessionCommand {
   /** STT를 붙일 대상 회의 ID입니다. */
   meetingId: string;
   /** LiveKit room 이름입니다. meetingId와 1:1일 수도 있지만 운영 정책상 별도 문자열일 수 있습니다. */
+  organizationId: string;
+  participantUserIds: string[];
   roomName: string;
   /** 요청 흐름 추적용 correlation ID입니다. 없으면 서비스 내부에서 새로 발급합니다. */
   correlationId?: string;
@@ -86,6 +91,8 @@ export class SttSessionService {
     const record: SttSessionRecord = {
       sessionId,
       meetingId: command.meetingId,
+      organizationId: command.organizationId,
+      participantUserIds: command.participantUserIds,
       roomName: command.roomName,
       correlationId: command.correlationId ?? randomUUID(),
       status: "CREATED"
@@ -157,6 +164,8 @@ export class SttSessionService {
     const runtime = new LiveKitMeetingSession({
       meetingId: record.meetingId,
       sessionId: record.sessionId,
+      organizationId: record.organizationId,
+      participantUserIds: record.participantUserIds,
       roomName: record.roomName,
       correlationId: record.correlationId,
       ...this.dependencies
@@ -223,6 +232,7 @@ export class SttSessionService {
     return {
       sessionId: record.sessionId,
       meetingId: record.meetingId,
+      organizationId: record.organizationId,
       roomName: record.roomName,
       status: record.status,
       pipelineCount: record.runtime?.pipelineCount ?? 0
