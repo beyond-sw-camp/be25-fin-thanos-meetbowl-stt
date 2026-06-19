@@ -16,12 +16,6 @@ export interface CaptionPublisher {
    * @param segment 발행할 자막 세그먼트 정보
    */
   publishCaption(segment: TranscriptSegment): Promise<void>;
-
-  /**
-   * FINALIZED 세그먼트가 RabbitMQ/Redis 등 후속 경로로 실제 전파된 뒤,
-   * 프론트 디버깅용으로 전송 여부를 알려주는 선택적 훅입니다.
-   */
-  publishFinalSegmentDelivered?(segment: TranscriptSegment): Promise<void>;
 }
 
 /** 

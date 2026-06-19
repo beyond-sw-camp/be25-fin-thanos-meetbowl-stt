@@ -364,7 +364,6 @@ export class SegmentController {
         reason,
         this.options.correlationId
       );
-      await this.options.captionPublisher.publishFinalSegmentDelivered?.(segment);
       const elapsedMs = segment.startedAtMs === undefined
         ? undefined
         : Math.max(0, (segment.endedAtMs ?? segment.startedAtMs) - segment.startedAtMs);
