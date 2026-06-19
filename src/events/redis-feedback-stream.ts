@@ -6,6 +6,7 @@ import {
   createClient,
   type RedisClientType
 } from "redis";
+import { z } from "zod";
 
 import { createEventEnvelope } from "./event-envelope.js";
 import type { FinalSegmentPublisher } from "../transcript/segment-publisher.js";
@@ -19,15 +20,53 @@ interface PublisherLogger {
   error(values: Record<string, unknown>, message: string): void;
 }
 
-export interface FeedbackGeneratedEnvelope {
-  eventType: "meeting.feedback.generated";
-  payload: {
-    meetingId: string;
-    feedbackType: string;
-    message: string;
-    sources: unknown[];
-    generatedAt: string;
-  };
+const feedbackGeneratedEnvelopeSchema = z.object({
+  eventId: z.string().uuid(),
+  eventType: z.literal("meeting.feedback.generated"),
+  occurredAt: z.string().datetime({ offset: true }),
+  producer: z.literal("ai-server"),
+  version: z.literal(1),
+  correlationId: z.string().uuid(),
+  payload: z.object({
+    feedbackId: z.string().uuid(),
+    meetingId: z.string().uuid(),
+    sessionId: z.string().uuid(),
+    feedbackType: z.enum([
+      "DECISION_REMINDER",
+      "DUPLICATE_DISCUSSION",
+      "RESOLVED_TOPIC"
+    ]),
+    message: z.string().min(1).max(500),
+    sources: z.array(z.unknown()).min(1),
+    audienceUserIds: z.array(z.string().uuid()).min(1),
+    fromSequence: z.number().int().nonnegative(),
+    toSequence: z.number().int().nonnegative(),
+    generatedAt: z.string().datetime({ offset: true })
+  }).refine(
+    (payload) => payload.toSequence >= payload.fromSequence,
+    { message: "toSequence must be greater than or equal to fromSequence" }
+  )
+});
+
+export type FeedbackGeneratedEnvelope = z.infer<
+  typeof feedbackGeneratedEnvelopeSchema
+>;
+
+export function parseFeedbackGeneratedEnvelope(
+  value: unknown
+): FeedbackGeneratedEnvelope | undefined {
+  const result = feedbackGeneratedEnvelopeSchema.safeParse(value);
+  return result.success ? result.data : undefined;
+}
+
+export function parseFeedbackGeneratedEnvelopeJson(
+  raw: string
+): FeedbackGeneratedEnvelope | undefined {
+  try {
+    return parseFeedbackGeneratedEnvelope(JSON.parse(raw));
+  } catch {
+    return undefined;
+  }
 }
 
 export class RedisFeedbackStream implements FinalSegmentPublisher {
@@ -181,9 +220,14 @@ export class RedisFeedbackStream implements FinalSegmentPublisher {
               continue;
             }
 
-            const event = JSON.parse(raw) as FeedbackGeneratedEnvelope;
-            if (event.eventType === "meeting.feedback.generated") {
+            const event = parseFeedbackGeneratedEnvelopeJson(raw);
+            if (event) {
               await handler(event);
+            } else {
+              this.logger.error(
+                { messageId: message.id },
+                "유효하지 않은 피드백 결과 이벤트 무시"
+              );
             }
             // 처리 완료 후 메시지 확인 처리
             await client.xAck(stream, this.consumerGroup, message.id);

@@ -33,6 +33,15 @@ export class LiveKitParticipantRegistry {
     return [...this.identityByUserId.keys()].sort();
   }
 
+  identitiesForUserIds(userIds: readonly string[]): string[] {
+    const identities = new Set<string>();
+    for (const userId of userIds) {
+      const identity = this.identityByUserId.get(userId.toLowerCase());
+      if (identity) identities.add(identity);
+    }
+    return [...identities].sort();
+  }
+
   clear(): void {
     this.identityByUserId.clear();
   }

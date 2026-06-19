@@ -26,6 +26,11 @@ test("tracks current authenticated users and returns a stable snapshot", () => {
   assert.equal(registry.add("guest-123"), false);
   assert.equal(registry.add(`user-${USER_A}`), true);
   assert.deepEqual(registry.snapshotUserIds(), [USER_A, USER_B]);
+  assert.deepEqual(
+    registry.identitiesForUserIds([USER_B, USER_A, USER_B]),
+    [`user-${USER_A}`, `user-${USER_B}`]
+  );
+  assert.deepEqual(registry.identitiesForUserIds(["5bb1ad5e-a202-4ef3-9218-570724f25225"]), []);
 
   registry.remove(`user-${USER_A}`);
   assert.deepEqual(registry.snapshotUserIds(), [USER_B]);

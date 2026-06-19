@@ -390,7 +390,25 @@ export class LiveKitMeetingSession {
   private async publishFeedback(
     event: FeedbackGeneratedEnvelope
   ): Promise<void> {
-    await this.captionPublisher?.publishFeedback(event);
+    if (
+      event.payload.meetingId !== this.options.meetingId ||
+      event.payload.sessionId !== this.options.sessionId
+    ) {
+      this.options.logger.warn(
+        {
+          meetingId: this.options.meetingId,
+          sessionId: this.options.sessionId,
+          feedbackId: event.payload.feedbackId
+        },
+        "현재 STT 세션과 일치하지 않는 피드백 결과 무시"
+      );
+      return;
+    }
+    const destinationIdentities = this.participantRegistry.identitiesForUserIds(
+      event.payload.audienceUserIds
+    );
+    if (destinationIdentities.length === 0) return;
+    await this.captionPublisher?.publishFeedback(event, destinationIdentities);
   }
 
   /** Active speaker 이벤트는 관측용으로만 유지합니다. 실제 STT 입력 선택은 RMS 기반으로 수행합니다. */
