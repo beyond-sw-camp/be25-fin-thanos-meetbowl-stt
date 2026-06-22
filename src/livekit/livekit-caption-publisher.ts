@@ -74,9 +74,24 @@ export class LiveKitCaptionPublisher implements CaptionPublisher {
     destinationIdentities: readonly string[]
   ): Promise<void> {
     if (destinationIdentities.length === 0) return;
+    const {
+      feedbackId,
+      meetingId,
+      sessionId,
+      feedbackType,
+      message,
+      sources,
+      generatedAt
+    } = event.payload;
     await this.publish("feedback.generated", {
       eventType: "feedback.generated",
-      ...event.payload
+      feedbackId,
+      meetingId,
+      sessionId,
+      feedbackType,
+      message,
+      sources,
+      generatedAt
     }, destinationIdentities);
   }
 

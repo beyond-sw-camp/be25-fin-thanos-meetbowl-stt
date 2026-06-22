@@ -55,6 +55,12 @@ test("publishes feedback only to specified LiveKit identities", async () => {
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.payload.eventType, "feedback.generated");
+  assert.equal(calls[0]?.payload.feedbackId, event.payload.feedbackId);
+  assert.equal(calls[0]?.payload.meetingId, event.payload.meetingId);
+  assert.equal(calls[0]?.payload.sessionId, event.payload.sessionId);
+  assert.equal(calls[0]?.payload.audienceUserIds, undefined);
+  assert.equal(calls[0]?.payload.fromSequence, undefined);
+  assert.equal(calls[0]?.payload.toSequence, undefined);
   assert.deepEqual(calls[0]?.options.destination_identities, destinations);
   assert.equal(calls[0]?.options.reliable, true);
   assert.equal(calls[0]?.options.topic, "feedback.generated");
