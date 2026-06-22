@@ -39,6 +39,13 @@ export interface SttSessionView {
   pipelineCount: number;
 }
 
+export interface StopMeetingSessionView {
+  meetingId: string;
+  sessionId: string | null;
+  status: "STOPPED";
+  stopped: boolean;
+}
+
 /** 시스템 내부 관리를 위한 세션 상세 레코드입니다. */
 interface SttSessionRecord {
   sessionId: string;
@@ -198,6 +205,37 @@ export class SttSessionService {
       record.status = "FAILED";
       throw error;
     }
+  }
+
+  async stopByMeetingId(meetingId: string): Promise<StopMeetingSessionView> {
+    const sessionId = this.meetingSessionIndex.get(meetingId);
+    if (!sessionId) {
+      return {
+        meetingId,
+        sessionId: null,
+        status: "STOPPED",
+        stopped: false
+      };
+    }
+
+    const record = this.sessions.get(sessionId);
+    if (!record) {
+      this.meetingSessionIndex.delete(meetingId);
+      return {
+        meetingId,
+        sessionId: null,
+        status: "STOPPED",
+        stopped: false
+      };
+    }
+
+    await this.stop(sessionId);
+    return {
+      meetingId,
+      sessionId,
+      status: "STOPPED",
+      stopped: true
+    };
   }
 
   /** 관리자용 기능: 현재 활성 세그먼트를 강제로 마감 처리합니다. */

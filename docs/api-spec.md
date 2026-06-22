@@ -93,6 +93,7 @@ X-Internal-Token: {internalToken}
 | POST | `/sessions/ensure-started` | meeting 기준으로 STT 세션 생성 및 시작을 멱등하게 보장 | meetbowl-be |
 | POST | `/sessions/{sessionId}/start` | STT 세션 시작 | meetbowl-be/System |
 | POST | `/sessions/{sessionId}/stop` | STT 세션 종료 | meetbowl-be/System |
+| POST | `/sessions/meetings/{meetingId}/stop` | 회의 기준으로 활성 STT 세션 종료 | meetbowl-be |
 | GET | `/sessions/{sessionId}` | STT 세션 상태 조회 | meetbowl-be |
 
 ### POST `/sessions`
@@ -158,6 +159,29 @@ X-Internal-Token: {internalToken}
 
 ---
 
+### POST `/sessions/meetings/{meetingId}/stop`
+
+회의 종료 authoritative state가 `meetbowl-be`에서 확정된 뒤 호출한다.
+
+#### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "meetingId": "uuid",
+    "sessionId": "uuid",
+    "status": "STOPPED",
+    "stopped": true
+  },
+  "message": null
+}
+```
+
+이 경로는 STT 서버가 마지막 active segment flush와 `meeting.ended` DataChannel 브로드캐스트를 수행한 뒤 세션을 정리하는 용도다.
+
+---
+
 ## 6. Transcript API
 
 Final Transcript는 `meetbowl-be`에 저장해야 한다.
@@ -205,9 +229,10 @@ STT 서버는 finalized segment 전체 목록을 보관하지 않는다. REST AP
 
 실시간 자막 화면 전달은 LiveKit DataChannel을 기본으로 한다. AI 실시간 피드백도 `meetbowl-stt`가 LiveKit DataChannel로 전달한다.
 
-각 segment의 `text`를 원문 자막 기준으로 생성한다. 이전 클라이언트 호환 기간에는
-`sourceText`, `sourceLanguage`, `sourceTranscript`를 함께 제공할 수 있지만 저장과
-피드백 입력은 `text`, `language`를 기준으로 한다.
+각 segment의 `text`와 `sourceText`를 원문 자막 기준으로 생성한다. 번역 탭 표시를 위해
+`koText`, `enText`를 함께 제공할 수 있으며, 이전 클라이언트 호환 기간에는
+`sourceLanguage`, `sourceTranscript`도 함께 제공한다. 저장과 피드백 입력은
+`text`, `language`를 기준으로 한다.
 
 ### Caption Event
 
@@ -221,6 +246,9 @@ STT 서버는 finalized segment 전체 목록을 보관하지 않는다. REST AP
   "status": "STREAMING",
   "language": "ko",
   "text": "오늘 회의 안건은 배포 일정입니다.",
+  "sourceText": "오늘 회의 안건은 배포 일정입니다.",
+  "koText": "오늘 회의 안건은 배포 일정입니다.",
+  "enText": "Today's agenda is the deployment schedule.",
   "startedAtMs": 1000,
   "endedAtMs": null,
   "updatedAt": "2026-06-02T01:00:00Z"
@@ -241,6 +269,7 @@ STT 서버는 finalized segment 전체 목록을 보관하지 않는다. REST AP
 | `caption.language.changed` | 자막 표시 언어 변경 |
 | `stt.status.changed` | STT 상태 변경 |
 | `feedback.generated` | 화면 표시용 AI 실시간 피드백 |
+| `meeting.ended` | 서버 기준 회의 종료 브로드캐스트 |
 
 ---
 

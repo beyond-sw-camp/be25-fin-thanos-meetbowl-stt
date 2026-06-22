@@ -213,6 +213,18 @@ export class LiveKitMeetingSession {
     this.connectionHealthy = false;
     this.options.feedbackStream.stopFeedbackConsumer(this.options.meetingId);
     this.trackCandidates.clear();
+    if (reason === "MEETING_ENDED") {
+      await this.captionPublisher?.publishMeetingEnded("해당 회의는 종료되었습니다.").catch((error) => {
+        this.options.logger.warn(
+          {
+            meetingId: this.options.meetingId,
+            sessionId: this.options.sessionId,
+            error: (error as Error).message
+          },
+          "회의 종료 DataChannel 브로드캐스트 발행 실패"
+        );
+      });
+    }
     await this.stopAllTrackReaders();
     this.activeTrackKey = undefined;
     const pipeline = this.pipeline;
@@ -271,7 +283,9 @@ export class LiveKitMeetingSession {
       silenceMs: this.options.config.VAD_SILENCE_MS,
       noDeltaTimeoutMs: this.options.config.SEGMENT_NO_DELTA_TIMEOUT_MS,
       translationGraceMs: this.options.config.TRANSLATION_GRACE_MS,
-      maxSegmentDurationMs: this.options.config.MAX_SEGMENT_DURATION_MS
+      maxSegmentDurationMs: this.options.config.MAX_SEGMENT_DURATION_MS,
+      streamingPublishMinIntervalMs:
+        this.options.config.STREAMING_PUBLISH_MIN_INTERVAL_MS
     });
   }
 
