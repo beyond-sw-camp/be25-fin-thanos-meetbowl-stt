@@ -58,6 +58,8 @@ export interface ParticipantAudioPipelineOptions {
   translationGraceMs: number;
   /** 한 세그먼트가 너무 길어질 때 강제로 끊는 최대 길이(ms)입니다. */
   maxSegmentDurationMs: number;
+  /** STREAMING caption.updated의 최소 발행 간격(ms)입니다. */
+  streamingPublishMinIntervalMs: number;
   /** 파이프라인 내부 상태와 오류를 남길 로거입니다. */
   logger: PipelineLogger;
 }
@@ -105,6 +107,7 @@ export class ParticipantAudioPipeline {
       noDeltaTimeoutMs: options.noDeltaTimeoutMs,
       translationGraceMs: options.translationGraceMs,
       maxSegmentDurationMs: options.maxSegmentDurationMs,
+      streamingPublishMinIntervalMs: options.streamingPublishMinIntervalMs,
       nextSequence: options.nextSequence,
       captionPublisher: options.captionPublisher,
       finalSegmentPublisher: options.finalSegmentPublisher,
