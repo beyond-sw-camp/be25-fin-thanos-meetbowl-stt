@@ -32,7 +32,7 @@ const envSchema = z.object({
   /** 전사 결과 생성 시의 지연 시간 정책입니다. (예: low는 빠른 응답 위주) */
   OPENAI_REALTIME_TRANSCRIPTION_DELAY: z
     .enum(["minimal", "low", "medium", "high", "xhigh"])
-    .default("low"),
+    .default("medium"),
   /** 실시간 번역 기능을 활성화할지 여부입니다. */
   ENABLE_TRANSLATION: booleanString,
 
@@ -70,22 +70,28 @@ const envSchema = z.object({
    * 발화 종료 판정 무음 시간입니다. 
    * 마지막 음성 감지 후 이 시간만큼 조용하면 한 문장이 끝난 것으로 봅니다.
    */
-  VAD_SILENCE_MS: positiveInteger.default(180),
+  VAD_SILENCE_MS: positiveInteger.default(520),
   /**
    * 엔진 응답 타임아웃입니다. 
    * 텍스트 델타가 오지 않으면서 무음인 상태가 지속되면 세그먼트를 강제 마감합니다.
    */
-  SEGMENT_NO_DELTA_TIMEOUT_MS: positiveInteger.default(700),
+  SEGMENT_NO_DELTA_TIMEOUT_MS: positiveInteger.default(1600),
   /**
    * 번역/전사 결과 동기화 유예 시간입니다. 
    * 최종 확정 전 늦게 도착하는 텍스트 조각들을 흡수하기 위해 대기합니다.
    */
-  TRANSLATION_GRACE_MS: positiveInteger.default(180),
+  TRANSLATION_GRACE_MS: positiveInteger.default(480),
   /**
    * 한 세그먼트(문장)의 최대 지속 시간입니다. - 15초
    * 발화가 너무 길어지면 자막 가독성을 위해 이 시간 주기로 문장을 강제 분리합니다.
    */
-  MAX_SEGMENT_DURATION_MS: positiveInteger.default(15000),
+  MAX_SEGMENT_DURATION_MS: positiveInteger.default(9000),
+  /**
+   * STREAMING 자막의 최소 발행 간격입니다.
+   * provider delta가 매우 자주 들어와도 화면 업데이트를 이 간격 단위로 묶어
+   * DataChannel publish와 JSON 직렬화 비용이 과도하게 늘지 않도록 합니다.
+   */
+  STREAMING_PUBLISH_MIN_INTERVAL_MS: z.coerce.number().int().min(0).default(320),
   /**
    * 화자 전환 유예 시간입니다.
    * Active Speaker가 바뀌었을 때 트랙을 즉시 바꾸지 않고 대기하여 짧은 잡음으로 인한 흔들림을 방지합니다.

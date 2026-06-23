@@ -42,6 +42,7 @@ function createDependencies(): SttSessionServiceDependencies {
       SEGMENT_NO_DELTA_TIMEOUT_MS: 1200,
       TRANSLATION_GRACE_MS: 500,
       MAX_SEGMENT_DURATION_MS: 15000,
+      STREAMING_PUBLISH_MIN_INTERVAL_MS: 80,
       TRACK_SWITCH_GRACE_MS: 450
     },
     rabbitPublisher: {
@@ -85,6 +86,7 @@ class TestableSttSessionService extends SttSessionService {
       {
         sessionId: string;
         meetingId: string;
+        organizationId: string;
         roomName: string;
         status: SttSessionView["status"];
       }
@@ -97,9 +99,16 @@ class TestableSttSessionService extends SttSessionService {
 
     // 실제 LiveKit runtime 없이도 ensureStarted의 meeting 단위 멱등성만 검증한다.
     record.status = "RUNNING";
+    (record as { runtime?: { isHealthy(): boolean; pipelineCount: number } }).runtime = {
+      isHealthy() {
+        return true;
+      },
+      pipelineCount: 0
+    };
     return {
       sessionId: record.sessionId,
       meetingId: record.meetingId,
+      organizationId: record.organizationId,
       roomName: record.roomName,
       status: record.status,
       pipelineCount: 0
@@ -112,10 +121,14 @@ test("ensureStarted는 같은 meetingId에서 기존 RUNNING 세션을 재사용
 
   const first = await service.ensureStarted({
     meetingId: "3ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
+    organizationId: "4ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
+    participantUserIds: ["5ef5f58f-50b2-4f0b-97bf-42e79d91ac39"],
     roomName: "meeting-3ef5f58f-50b2-4f0b-97bf-42e79d91ac39"
   });
   const second = await service.ensureStarted({
     meetingId: "3ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
+    organizationId: "4ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
+    participantUserIds: ["5ef5f58f-50b2-4f0b-97bf-42e79d91ac39"],
     roomName: "meeting-3ef5f58f-50b2-4f0b-97bf-42e79d91ac39"
   });
 

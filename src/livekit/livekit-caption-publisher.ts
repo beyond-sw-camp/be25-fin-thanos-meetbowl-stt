@@ -48,6 +48,8 @@ export class LiveKitCaptionPublisher implements CaptionPublisher {
       publishedAtMs,
       sourceLanguage: segment.sourceLanguage,
       sourceText: segment.sourceText,
+      koText: segment.koText,
+      enText: segment.enText,
       sourceTranscript: segment.sourceTranscript?.trim() || undefined,
       updatedAt: new Date().toISOString()
     });
@@ -73,6 +75,15 @@ export class LiveKitCaptionPublisher implements CaptionPublisher {
     await this.publish("feedback.generated", {
       eventType: "feedback.generated",
       ...event.payload
+    });
+  }
+
+  async publishMeetingEnded(message = "해당 회의는 종료되었습니다."): Promise<void> {
+    await this.publish("meeting.ended", {
+      eventType: "meeting.ended",
+      meetingId: this.context.meetingId,
+      reason: message,
+      endedAt: new Date().toISOString()
     });
   }
 
