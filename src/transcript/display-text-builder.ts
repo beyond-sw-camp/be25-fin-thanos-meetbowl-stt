@@ -36,6 +36,66 @@ function sanitizeTargetText(text: string, targetLanguage: "ko" | "en"): string {
   return normalize(cleaned);
 }
 
+function sameNormalizedText(left: string, right: string): boolean {
+  return normalize(left).toLowerCase() === normalize(right).toLowerCase();
+}
+
+function selectFallbackSourceCandidate(
+  sourceCandidateKo: string,
+  sourceCandidateEn: string
+): string {
+  const koCandidate = normalize(sourceCandidateKo);
+  const enCandidate = normalize(sourceCandidateEn);
+
+  if (!koCandidate) return enCandidate;
+  if (!enCandidate) return koCandidate;
+
+  const koLanguage = detectSourceLanguage(koCandidate);
+  const enLanguage = detectSourceLanguage(enCandidate);
+
+  if (koLanguage === "ko" && enLanguage !== "ko") return koCandidate;
+  if (enLanguage === "en" && koLanguage !== "en") return enCandidate;
+
+  return "";
+}
+
+function detectTranslatedTranscriptFallback(
+  sourceTranscript: string,
+  sourceCandidateKo: string,
+  sourceCandidateEn: string,
+  koTargetOutput: string,
+  enTargetOutput: string
+): string {
+  const transcript = normalize(sourceTranscript);
+  if (!transcript) return "";
+
+  const koCandidate = normalize(sourceCandidateKo);
+  const enCandidate = normalize(sourceCandidateEn);
+  const koTarget = sanitizeTargetText(koTargetOutput, "ko");
+  const enTarget = sanitizeTargetText(enTargetOutput, "en");
+
+  const transcriptLanguage = detectSourceLanguage(transcript);
+  const koCandidateLanguage = detectSourceLanguage(koCandidate);
+  const enCandidateLanguage = detectSourceLanguage(enCandidate);
+
+  /**
+   * OpenAI 전사 결과가 실제 원문이 아니라 번역문으로 내려오는 경우가 있어,
+   * 번역 세션의 source 후보/target 결과와 충돌하면 원문 후보를 우선한다.
+   */
+  if (
+    transcriptLanguage === "en" &&
+    koCandidateLanguage === "ko" &&
+    koCandidate &&
+    sameNormalizedText(koCandidate, koTarget) &&
+    enTarget &&
+    sameNormalizedText(transcript, enTarget)
+  ) {
+    return koCandidate;
+  }
+
+  return "";
+}
+
 /** 
  * 여러 엔진이 제공하는 원문 후보 중 가장 신뢰도가 높은 텍스트를 선택합니다.
  * 우선순위: 1. 전용 전사 엔진 결과 > 2. 타겟 언어 판별 결과에 따른 번역 엔진 입력 원문
@@ -43,27 +103,24 @@ function sanitizeTargetText(text: string, targetLanguage: "ko" | "en"): string {
 function chooseSourceText(
   sourceTranscript: string,
   sourceCandidateKo: string,
-  sourceCandidateEn: string
+  sourceCandidateEn: string,
+  koTargetOutput: string,
+  enTargetOutput: string
 ): string {
   const transcript = normalize(sourceTranscript);
-  // 1. 핵심 전사 엔진(Transcription)의 결과가 있다면 최우선 채택
-  if (transcript) return transcript;
+  if (transcript) {
+    const recoveredSource = detectTranslatedTranscriptFallback(
+      transcript,
+      sourceCandidateKo,
+      sourceCandidateEn,
+      koTargetOutput,
+      enTargetOutput
+    );
+    if (recoveredSource) return recoveredSource;
+    return transcript;
+  }
 
-  const koCandidate = normalize(sourceCandidateKo);
-  const enCandidate = normalize(sourceCandidateEn);
-
-  if (!koCandidate) return enCandidate;
-  if (!enCandidate) return koCandidate;
-
-  // 2. 언어 판별 휴리스틱을 적용하여 실제 발화 언어와 일치하는 후보 선택
-  const koLanguage = detectSourceLanguage(koCandidate);
-  const enLanguage = detectSourceLanguage(enCandidate);
-
-  if (koLanguage === "ko" && enLanguage !== "ko") return koCandidate;
-  if (enLanguage === "en" && koLanguage !== "en") return enCandidate;
-
-  // 3. 둘 다 모호하면 원문으로 단정하지 않는다.
-  return "";
+  return selectFallbackSourceCandidate(sourceCandidateKo, sourceCandidateEn);
 }
 
 function chooseReadableFallback(
@@ -113,7 +170,9 @@ export function buildDisplayTexts(
   const sourceText = chooseSourceText(
     segment.sourceTranscript,
     segment.sourceCandidateKo,
-    segment.sourceCandidateEn
+    segment.sourceCandidateEn,
+    segment.koTargetOutput,
+    segment.enTargetOutput
   );
   const koTargetOutput = sanitizeTargetText(segment.koTargetOutput, "ko");
   const enTargetOutput = sanitizeTargetText(segment.enTargetOutput, "en");

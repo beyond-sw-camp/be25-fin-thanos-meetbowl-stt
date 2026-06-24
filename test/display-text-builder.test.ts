@@ -117,6 +117,26 @@ test("prefers transcription source over translation-derived candidates", () => {
   );
 });
 
+test("recovers Korean source when transcription result matches English translation", () => {
+  assert.deepEqual(
+    buildDisplayTexts(
+      segment({
+        sourceTranscript: "Let's review the deployment schedule.",
+        sourceCandidateKo: "오늘 배포 일정을 확인합니다.",
+        sourceCandidateEn: "Let's review the deployment schedule.",
+        koTargetOutput: "오늘 배포 일정을 확인합니다.",
+        enTargetOutput: "Let's review the deployment schedule."
+      })
+    ),
+    {
+      sourceLanguage: "ko",
+      sourceText: "오늘 배포 일정을 확인합니다.",
+      koText: "오늘 배포 일정을 확인합니다.",
+      enText: "Let's review the deployment schedule."
+    }
+  );
+});
+
 test("falls back to readable target texts when source candidates are ambiguous", () => {
   assert.deepEqual(
     buildDisplayTexts(
