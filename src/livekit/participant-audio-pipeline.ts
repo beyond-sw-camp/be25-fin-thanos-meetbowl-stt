@@ -42,6 +42,8 @@ export interface ParticipantAudioPipelineOptions {
   translationProvider: TranslationProvider;
   /** 원문 전사 세션을 생성하는 transcription provider 팩토리입니다. */
   transcriptionProvider: TranscriptionProvider;
+  /** OpenAI Realtime 세션을 미리 교체할 주기(ms)입니다. */
+  sessionRotationMs: number;
   /** 번역 세션을 실제로 붙일지 결정하는 플래그입니다. */
   enableTranslation: boolean;
   /** LiveKit DataChannel로 streaming/final caption을 보내는 발행기입니다. */
@@ -70,11 +72,11 @@ export class ParticipantAudioPipeline {
   /** 자막 세그먼트의 생명주기와 텍스트 조각(Delta) 누적을 제어하는 핵심 로직 객체입니다. */
   private readonly segmentController: SegmentController;
   /** OpenAI Realtime API를 사용한 한국어 분석 세션입니다. */
-  private readonly koSession;
+  private koSession;
   /** OpenAI Realtime API를 사용한 영어 분석 세션입니다. */
-  private readonly enSession;
+  private enSession;
   /** 핵심 전사(STT) 결과를 추출하기 위한 메인 전사 엔진 세션입니다. */
-  private readonly transcriptionSession;
+  private transcriptionSession;
 
   /** 번역 provider 연결이 현재 살아 있는지 나타냅니다. */
   private translationEnabled = false;
@@ -86,6 +88,16 @@ export class ParticipantAudioPipeline {
   private translationAudioFrames = 0;
   /** 현재 발화가 시작된 시스템 시각을 기록하여 분석 지연 시간을 추적합니다. */
   private activeSpeechStartedAtMs?: number;
+  /** 전체 파이프라인 중지 요청 이후에는 provider 자동 복구를 중단합니다. */
+  private stopped = false;
+  /** source/ko/en provider 상태를 추적해 health 판단과 재연결 제어에 사용합니다. */
+  private readonly providerStates = {
+    source: { connected: false, reconnecting: false, generation: 0, createdAtMs: 0 },
+    ko: { connected: false, reconnecting: false, generation: 0, createdAtMs: 0 },
+    en: { connected: false, reconnecting: false, generation: 0, createdAtMs: 0 }
+  };
+  /** 오래된 OpenAI 세션을 선제적으로 교체하기 위한 주기 검사 타이머입니다. */
+  private rotationTimer?: NodeJS.Timeout;
 
   /** 현재 이 파이프라인이 분석 중인 참가자의 고유 식별자입니다. */
   private activeParticipantIdentity?: string;
@@ -133,35 +145,9 @@ export class ParticipantAudioPipeline {
      * 현재 화면 기준 원문 자막은 transcriptionSession이 우선이지만,
      * transcription provider가 늦거나 실패할 때는 translation source delta가 보조 근거가 됩니다.
      */
-    this.koSession = options.translationProvider.createSession("ko", {
-      onSourceDelta: (delta) =>
-        this.segmentController.appendDelta("sourceCandidateKo", delta),
-      onTranslationDelta: (delta) =>
-        this.segmentController.appendDelta("koTargetOutput", delta),
-      onError: (error) => this.handleProviderError("ko", error)
-    });
-
-    this.enSession = options.translationProvider.createSession("en", {
-      onSourceDelta: (delta) =>
-        this.segmentController.appendDelta("sourceCandidateEn", delta),
-      onTranslationDelta: (delta) =>
-        this.segmentController.appendDelta("enTargetOutput", delta),
-      onError: (error) => this.handleProviderError("en", error)
-    });
-
-    /**
-     * 원문 transcription 세션은 최종적으로 화면에 보여줄 `text`의 1순위 데이터 소스입니다.
-     * delta는 빠른 STREAMING 표시용, completed는 더 정확한 FINALIZED 보정용으로 사용합니다.
-     */
-    this.transcriptionSession = options.transcriptionProvider.createSession({
-      onTranscriptDelta: (delta) => {
-        this.segmentController.appendDelta("sourceTranscript", delta);
-      },
-      onTranscriptCompleted: (transcript) => {
-        this.segmentController.replaceSourceTranscript(transcript);
-      },
-      onError: (error) => this.handleProviderError("source", error)
-    });
+    this.koSession = this.createTranslationSession("ko");
+    this.enSession = this.createTranslationSession("en");
+    this.transcriptionSession = this.createTranscriptionSession();
   }
 
   /**
@@ -169,13 +155,17 @@ export class ParticipantAudioPipeline {
    * 일부 엔진 연결에 실패하더라도 서비스가 중단되지 않도록 탄력적으로 구성되어 있습니다.
    */
   async start(): Promise<void> {
+    this.stopped = false;
+    this.startRotationTimer();
     try {
       // 1. 핵심 전사(Transcription) 엔진 연결 시도
       try {
         await this.transcriptionSession.connect();
         this.transcriptionEnabled = true;
+        this.providerStates.source.connected = true;
       } catch (error) {
         this.transcriptionEnabled = false;
+        this.providerStates.source.connected = false;
         this.options.logger.warn({ error: (error as Error).message }, "핵심 전사 엔진 연결 실패, 보조 모드로 동작합니다.");
       }
 
@@ -190,8 +180,12 @@ export class ParticipantAudioPipeline {
         try {
           await Promise.all([this.koSession.connect(), this.enSession.connect()]);
           this.translationEnabled = true;
+          this.providerStates.ko.connected = true;
+          this.providerStates.en.connected = true;
         } catch (error) {
           this.translationEnabled = false;
+          this.providerStates.ko.connected = false;
+          this.providerStates.en.connected = false;
           this.options.logger.warn({ error: (error as Error).message }, "실시간 번역 엔진 연결 실패");
         }
       }
@@ -250,6 +244,8 @@ export class ParticipantAudioPipeline {
 
   /** 파이프라인 전체를 중단하고 할당된 모든 엔진 리소스를 해제합니다. */
   async stop(reason: FinalizationReason): Promise<void> {
+    this.stopped = true;
+    this.stopRotationTimer();
     await this.deactivateSource(reason);
     
     if (this.transcriptionEnabled) {
@@ -269,6 +265,20 @@ export class ParticipantAudioPipeline {
   /** 현재 분석 중인 문장이 있다면 강제로 마감하여 발행합니다. */
   async flush(reason: FinalizationReason): Promise<void> {
     await this.segmentController.flush(reason);
+  }
+
+  /** LiveKit 연결이 살아 있어도 모든 provider가 죽으면 이 파이프라인은 unhealthy로 본다. */
+  isHealthy(): boolean {
+    if (this.transcriptionEnabled && this.providerStates.source.connected) {
+      return true;
+    }
+    if (
+      this.translationEnabled &&
+      (this.providerStates.ko.connected || this.providerStates.en.connected)
+    ) {
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -322,11 +332,178 @@ export class ParticipantAudioPipeline {
     }
   }
 
-  private handleProviderError(targetLanguage: "ko" | "en" | "source", error: Error): void {
+  private handleProviderError(
+    targetLanguage: "ko" | "en" | "source",
+    generation: number,
+    error: Error
+  ): void {
+    const state = this.providerStates[targetLanguage];
+    if (state.generation !== generation) {
+      return;
+    }
+
+    state.connected = false;
+    if (targetLanguage === "source") {
+      this.transcriptionEnabled = false;
+    } else if (
+      !this.providerStates.ko.connected &&
+      !this.providerStates.en.connected
+    ) {
+      this.translationEnabled = false;
+    }
+
     this.options.logger.warn(
       { targetLanguage, error: error.message },
       "STT 서비스 프로바이더 연동 중 경미한 오류 또는 응답 지연 발생"
     );
+
+    void this.recoverProvider(targetLanguage, generation);
+  }
+
+  private createTranslationSession(targetLanguage: "ko" | "en") {
+    const state = this.providerStates[targetLanguage];
+    const generation = ++state.generation;
+    state.createdAtMs = Date.now();
+
+    return this.options.translationProvider.createSession(targetLanguage, {
+      onSourceDelta: (delta) => {
+        if (state.generation !== generation) return;
+        this.segmentController.appendDelta(
+          targetLanguage === "ko" ? "sourceCandidateKo" : "sourceCandidateEn",
+          delta
+        );
+      },
+      onTranslationDelta: (delta) => {
+        if (state.generation !== generation) return;
+        this.segmentController.appendDelta(
+          targetLanguage === "ko" ? "koTargetOutput" : "enTargetOutput",
+          delta
+        );
+      },
+      onError: (error) => this.handleProviderError(targetLanguage, generation, error)
+    });
+  }
+
+  private createTranscriptionSession() {
+    const state = this.providerStates.source;
+    const generation = ++state.generation;
+    state.createdAtMs = Date.now();
+
+    return this.options.transcriptionProvider.createSession({
+      onTranscriptDelta: (delta) => {
+        if (state.generation !== generation) return;
+        this.segmentController.appendDelta("sourceTranscript", delta);
+      },
+      onTranscriptCompleted: (transcript) => {
+        if (state.generation !== generation) return;
+        this.segmentController.replaceSourceTranscript(transcript);
+      },
+      onError: (error) => this.handleProviderError("source", generation, error)
+    });
+  }
+
+  private async recoverProvider(
+    targetLanguage: "ko" | "en" | "source",
+    generation: number
+  ): Promise<void> {
+    const state = this.providerStates[targetLanguage];
+    if (this.stopped || state.generation !== generation || state.reconnecting) {
+      return;
+    }
+
+    state.reconnecting = true;
+    try {
+      if (targetLanguage === "source") {
+        await this.transcriptionSession.close().catch(() => undefined);
+        this.transcriptionSession = this.createTranscriptionSession();
+        await this.transcriptionSession.connect();
+        this.providerStates.source.connected = true;
+        this.transcriptionEnabled = true;
+      } else {
+        const currentSession =
+          targetLanguage === "ko" ? this.koSession : this.enSession;
+        await currentSession.close().catch(() => undefined);
+        const nextSession = this.createTranslationSession(targetLanguage);
+        if (targetLanguage === "ko") {
+          this.koSession = nextSession;
+        } else {
+          this.enSession = nextSession;
+        }
+        await nextSession.connect();
+        this.providerStates[targetLanguage].connected = true;
+        this.translationEnabled = true;
+      }
+
+      this.options.logger.info(
+        {
+          meetingId: this.options.meetingId,
+          sessionId: this.options.sessionId,
+          targetLanguage
+        },
+        "STT provider session reconnected"
+      );
+    } catch (reconnectError) {
+      this.options.logger.error(
+        {
+          meetingId: this.options.meetingId,
+          sessionId: this.options.sessionId,
+          targetLanguage,
+          error:
+            reconnectError instanceof Error
+              ? reconnectError.message
+              : String(reconnectError)
+        },
+        "STT provider session reconnect failed"
+      );
+    } finally {
+      state.reconnecting = false;
+    }
+  }
+
+  private startRotationTimer(): void {
+    this.stopRotationTimer();
+    if (this.options.sessionRotationMs <= 0) return;
+    this.rotationTimer = setInterval(() => {
+      void this.rotateExpiredProviders();
+    }, Math.min(this.options.sessionRotationMs, 60_000));
+  }
+
+  private stopRotationTimer(): void {
+    if (!this.rotationTimer) return;
+    clearInterval(this.rotationTimer);
+    this.rotationTimer = undefined;
+  }
+
+  private async rotateExpiredProviders(): Promise<void> {
+    if (this.stopped) return;
+    await this.rotateProviderIfExpired("source");
+    if (this.translationEnabled) {
+      await Promise.all([
+        this.rotateProviderIfExpired("ko"),
+        this.rotateProviderIfExpired("en")
+      ]);
+    }
+  }
+
+  private async rotateProviderIfExpired(targetLanguage: "ko" | "en" | "source"): Promise<void> {
+    const state = this.providerStates[targetLanguage];
+    if (!state.connected || state.reconnecting || state.createdAtMs <= 0) return;
+    if (Date.now() - state.createdAtMs < this.options.sessionRotationMs) return;
+
+    if (targetLanguage === "source" && this.transcriptionEnabled) {
+      this.transcriptionSession.commitAudio();
+      await delay(this.options.translationGraceMs);
+    }
+    this.options.logger.info(
+      {
+        meetingId: this.options.meetingId,
+        sessionId: this.options.sessionId,
+        targetLanguage,
+        rotationMs: this.options.sessionRotationMs,
+      },
+      "STT provider session rotation requested"
+    );
+    void this.recoverProvider(targetLanguage, state.generation);
   }
 }
 

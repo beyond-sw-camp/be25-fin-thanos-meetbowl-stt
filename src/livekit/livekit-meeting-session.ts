@@ -245,7 +245,7 @@ export class LiveKitMeetingSession {
    * STT 세션 서비스는 이 값을 보고 stale RUNNING 세션을 재사용하지 않고 새로 시작한다.
    */
   isHealthy(): boolean {
-    return this.connectionHealthy;
+    return this.connectionHealthy && (this.pipeline?.isHealthy() ?? false);
   }
 
   /** 진행 중인 미완성 자막을 즉시 최종 데이터로 발행 요청합니다. */
@@ -272,6 +272,7 @@ export class LiveKitMeetingSession {
       nextSequence: () => this.sequence++,
       translationProvider: this.options.translationProvider,
       transcriptionProvider: this.options.transcriptionProvider,
+      sessionRotationMs: this.options.config.OPENAI_REALTIME_SESSION_ROTATION_MS,
       enableTranslation: this.options.config.ENABLE_TRANSLATION,
       captionPublisher: this.captionPublisher,
       finalSegmentPublisher: new CompositeFinalSegmentPublisher([
