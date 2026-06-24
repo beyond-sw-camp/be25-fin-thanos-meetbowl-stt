@@ -48,6 +48,8 @@ export class LiveKitCaptionPublisher implements CaptionPublisher {
       publishedAtMs,
       sourceLanguage: segment.sourceLanguage,
       sourceText: segment.sourceText,
+      koText: segment.koText,
+      enText: segment.enText,
       sourceTranscript: segment.sourceTranscript?.trim() || undefined,
       updatedAt: new Date().toISOString()
     });
@@ -93,6 +95,15 @@ export class LiveKitCaptionPublisher implements CaptionPublisher {
       sources,
       generatedAt
     }, destinationIdentities);
+  }
+
+  async publishMeetingEnded(message = "해당 회의는 종료되었습니다."): Promise<void> {
+    await this.publish("meeting.ended", {
+      eventType: "meeting.ended",
+      meetingId: this.context.meetingId,
+      reason: message,
+      endedAt: new Date().toISOString()
+    });
   }
 
   /** LiveKit 네이티브 SDK의 데이터 전송 기능을 호출합니다. */

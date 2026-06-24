@@ -37,6 +37,14 @@ function fakeRuntime(): AppRuntime {
           status: "RUNNING",
           pipelineCount: 1
         };
+      },
+      async stopByMeetingId(meetingId: string) {
+        return {
+          meetingId,
+          sessionId: "0de73437-e29f-4cb3-82fd-32b1478d66ad",
+          status: "STOPPED",
+          stopped: true
+        };
       }
     }
   } as unknown as AppRuntime;
@@ -112,6 +120,28 @@ test("POST /api/v1/sessions/ensure-started returns a running session envelope", 
     assert.equal(response.statusCode, 200);
     assert.equal(response.json().data.status, "RUNNING");
     assert.equal(response.json().data.pipelineCount, 1);
+  } finally {
+    await app.close();
+  }
+});
+
+test("POST /api/v1/sessions/meetings/:meetingId/stop returns a stopped meeting envelope", async () => {
+  const app = createApp({ runtime: fakeRuntime() });
+  try {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/sessions/meetings/4dd5adca-71ba-4204-a91f-e50b29bb83b9/stop",
+      headers: {
+        "x-internal-token": "test-internal-token"
+      }
+    });
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json().data, {
+      meetingId: "4dd5adca-71ba-4204-a91f-e50b29bb83b9",
+      sessionId: "0de73437-e29f-4cb3-82fd-32b1478d66ad",
+      status: "STOPPED",
+      stopped: true
+    });
   } finally {
     await app.close();
   }

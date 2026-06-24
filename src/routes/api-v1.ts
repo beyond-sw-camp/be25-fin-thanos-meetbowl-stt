@@ -27,6 +27,10 @@ const sessionParamsSchema = z.object({
   sessionId: z.string().uuid()
 });
 
+const meetingParamsSchema = z.object({
+  meetingId: z.string().uuid()
+});
+
 export interface ApiV1RoutesOptions {
   runtime?: AppRuntime;
 }
@@ -135,6 +139,19 @@ export const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
       handleSessionRequest(service, request.params, reply, (sessionId) =>
         service.stop(sessionId)
       )
+  );
+
+  /** 회의 기준 세션 중지: BE가 authoritative 회의 종료를 확정했을 때 사용한다. */
+  app.post(
+    "/sessions/meetings/:meetingId/stop",
+    { preHandler: requireInternalToken },
+    async (request, reply) => {
+      const parsed = meetingParamsSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return validationError(reply, parsed.error);
+      }
+      return success(await service.stopByMeetingId(parsed.data.meetingId));
+    }
   );
 
   /** 강제 자막 플러시: 진행 중인 미완성 세그먼트를 즉시 최종 데이터로 발행합니다. */

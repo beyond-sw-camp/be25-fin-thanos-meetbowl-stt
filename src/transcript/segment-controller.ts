@@ -43,6 +43,8 @@ export interface SegmentControllerOptions {
   translationGraceMs: number;
   /** 세그먼트가 너무 길어지는 것을 막기 위한 최대 지속 시간입니다. */
   maxSegmentDurationMs: number;
+  /** STREAMING 자막 발행을 과도하게 반복하지 않도록 묶는 최소 간격입니다. */
+  streamingPublishMinIntervalMs?: number;
   /** 세그먼트 순번을 외부에서 공급받는 콜백입니다. */
   nextSequence: () => number;
   /** STREAMING/FINALIZED 자막을 LiveKit으로 발행하는 채널입니다. */
@@ -84,9 +86,19 @@ export class SegmentController {
   private maxDurationTimer?: NodeJS.Timeout;
   /** speech stop 이후 provider의 마지막 응답을 기다리기 위한 grace 타이머입니다. */
   private graceTimer?: NodeJS.Timeout;
+  /** STREAMING caption.updated를 debounce/coalesce 하기 위한 타이머입니다. */
+  private streamingPublishTimer?: NodeJS.Timeout;
 
   /** 확정(Finalize) 프로세스가 중복 실행되지 않도록 방지하는 플래그입니다. */
   private finalizing = false;
+  /** STREAMING caption publish가 진행 중인지 나타냅니다. */
+  private streamingPublishInFlight = false;
+  /** 직전 STREAMING 발행 시각입니다. */
+  private lastStreamingPublishedAtMs = 0;
+  /** 직전 STREAMING으로 보낸 텍스트입니다. */
+  private lastStreamingPublishedText = "";
+  /** publish 중 새 delta가 도착했는지 표시합니다. */
+  private pendingStreamingPublish = false;
   /** 다중 마이크 환경에서 동일 문장이 중복 발행되는 것을 막기 위한 최근 확정 텍스트 캐시입니다. */
   private lastFinalizedText = "";
   /** 마지막 finalized 문장이 확정된 절대 시각입니다. 중복 억제 시간 창 계산에 사용합니다. */
@@ -138,6 +150,9 @@ export class SegmentController {
       },
       "STT speech segment opened"
     );
+    this.lastStreamingPublishedAtMs = 0;
+    this.lastStreamingPublishedText = "";
+    this.pendingStreamingPublish = false;
 
     // 설정된 최대 발화 시간을 초과할 경우 강제로 세그먼트를 분리한다.
     // 이 타이머는 "아무리 말이 계속 이어져도 한 세그먼트가 너무 길어지지 않게 하는 안전장치"다.
@@ -200,7 +215,7 @@ export class SegmentController {
     );
     this.active.lastDeltaAtMs = nowMs;
     this.refreshTimers();
-    void this.publishStreaming();
+    this.scheduleStreamingPublish();
   }
 
   /**
@@ -230,7 +245,7 @@ export class SegmentController {
     this.active[channel] += delta;
     this.active.lastDeltaAtMs = nowMs;
     this.refreshTimers();
-    void this.publishStreaming();
+    this.scheduleStreamingPublish();
   }
 
   /** 진행 중인 발화를 즉시 강제 마감합니다. */
@@ -303,9 +318,68 @@ export class SegmentController {
    */
   private async publishStreaming(): Promise<void> {
     const segment = this.toTranscriptSegment("STREAMING");
-    if (segment.text) {
+    if (!segment.text) return;
+    if (segment.text === this.lastStreamingPublishedText) return;
+
+    this.streamingPublishInFlight = true;
+    try {
       await this.options.captionPublisher.publishCaption(segment);
+      this.lastStreamingPublishedText = segment.text;
+      this.lastStreamingPublishedAtMs = Date.now();
+    } finally {
+      this.streamingPublishInFlight = false;
+      if (this.pendingStreamingPublish) {
+        this.pendingStreamingPublish = false;
+        this.scheduleStreamingPublish();
+      }
     }
+  }
+
+  private scheduleStreamingPublish(nowMs = Date.now()): void {
+    if (!this.active || this.finalizing) return;
+
+    const minIntervalMs = Math.max(
+      0,
+      this.options.streamingPublishMinIntervalMs ?? 0
+    );
+
+    if (this.streamingPublishInFlight) {
+      this.pendingStreamingPublish = true;
+      return;
+    }
+
+    const segment = this.toTranscriptSegment("STREAMING");
+    if (!segment.text || segment.text === this.lastStreamingPublishedText) {
+      return;
+    }
+
+    const elapsedMs = nowMs - this.lastStreamingPublishedAtMs;
+    const shouldPublishNow =
+      this.lastStreamingPublishedAtMs === 0 || elapsedMs >= minIntervalMs;
+
+    if (shouldPublishNow) {
+      if (this.streamingPublishTimer) {
+        clearTimeout(this.streamingPublishTimer);
+        this.streamingPublishTimer = undefined;
+      }
+      void this.publishStreaming();
+      return;
+    }
+
+    this.pendingStreamingPublish = true;
+    if (this.streamingPublishTimer) {
+      return;
+    }
+
+    const waitMs = Math.max(0, minIntervalMs - elapsedMs);
+    this.streamingPublishTimer = setTimeout(() => {
+      this.streamingPublishTimer = undefined;
+      if (!this.pendingStreamingPublish) {
+        return;
+      }
+      this.pendingStreamingPublish = false;
+      void this.publishStreaming();
+    }, waitMs);
   }
 
   /**
@@ -395,6 +469,9 @@ export class SegmentController {
     // 서로 다른 문장이 한 세그먼트처럼 합쳐지는 문제가 생긴다.
     this.active = undefined;
     this.sequence = undefined;
+    this.lastStreamingPublishedAtMs = 0;
+    this.lastStreamingPublishedText = "";
+    this.pendingStreamingPublish = false;
   }
 
   private finalizeFromTimer(reason: FinalizationReason): void {
@@ -454,9 +531,11 @@ export class SegmentController {
     if (this.noDeltaTimer) clearTimeout(this.noDeltaTimer);
     if (this.maxDurationTimer) clearTimeout(this.maxDurationTimer);
     if (this.graceTimer) clearTimeout(this.graceTimer);
+    if (this.streamingPublishTimer) clearTimeout(this.streamingPublishTimer);
     this.noDeltaTimer = undefined;
     this.maxDurationTimer = undefined;
     this.graceTimer = undefined;
+    this.streamingPublishTimer = undefined;
   }
 
   private isDuplicateFinalSegment(text: string, nowMs = Date.now()): boolean {

@@ -42,7 +42,7 @@ test("publishes streaming updates and one finalized segment", async () => {
     1130
   );
   controller.stopSpeech(1200);
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, 60));
 
   assert.equal(finalized.length, 1);
   assert.equal(finalized[0]?.status, "FINALIZED");
@@ -58,6 +58,49 @@ test("publishes streaming updates and one finalized segment", async () => {
 
   await controller.flush("MANUAL_FLUSH");
   assert.equal(finalized.length, 1);
+});
+
+test("coalesces frequent streaming caption publishes within a segment", async () => {
+  const captions: TranscriptSegment[] = [];
+  const controller = new SegmentController({
+    meetingId: "meeting-id",
+    sessionId: "session-id",
+    organizationId: "organization-id",
+    getParticipantUserIds: () => [],
+    meetingStartedAtMs: 1000,
+    noDeltaTimeoutMs: 1000,
+    translationGraceMs: 5,
+    maxSegmentDurationMs: 1000,
+    streamingPublishMinIntervalMs: 40,
+    nextSequence: () => 1,
+    correlationId: "correlation-id",
+    logger: {
+      info() {}
+    },
+    captionPublisher: {
+      async publishCaption(segment) {
+        captions.push(segment);
+      }
+    },
+    finalSegmentPublisher: {
+      async publishFinalSegment() {}
+    }
+  });
+
+  controller.startSpeech(1100);
+  controller.appendDelta("sourceTranscript", "안녕", 1110);
+  controller.appendDelta("sourceTranscript", "하세요", 1115);
+  controller.appendDelta("sourceTranscript", " 오늘", 1120);
+  controller.appendDelta("sourceTranscript", " 일정", 1125);
+
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  const streamingCaptions = captions.filter(
+    (caption) => caption.status === "STREAMING"
+  );
+  assert.ok(streamingCaptions.length >= 1);
+  assert.ok(streamingCaptions.length <= 2);
+  assert.equal(streamingCaptions.at(-1)?.text, "안녕하세요 오늘 일정");
 });
 
 test("retains the active segment when final publishing fails and retries on flush", async () => {

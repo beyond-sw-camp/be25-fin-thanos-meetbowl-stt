@@ -42,6 +42,7 @@ function createDependencies(): SttSessionServiceDependencies {
       SEGMENT_NO_DELTA_TIMEOUT_MS: 1200,
       TRANSLATION_GRACE_MS: 500,
       MAX_SEGMENT_DURATION_MS: 15000,
+      STREAMING_PUBLISH_MIN_INTERVAL_MS: 80,
       TRACK_SWITCH_GRACE_MS: 450
     },
     rabbitPublisher: {

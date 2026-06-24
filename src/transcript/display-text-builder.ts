@@ -24,6 +24,18 @@ function normalize(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+function sanitizeTargetText(text: string, targetLanguage: "ko" | "en"): string {
+  const normalized = normalize(text);
+  if (!normalized) return "";
+
+  const cleaned =
+    targetLanguage === "ko"
+      ? normalized.replace(/[A-Za-z]/g, "")
+      : normalized.replace(/[\uAC00-\uD7A3]/g, "");
+
+  return normalize(cleaned);
+}
+
 /** 
  * 여러 엔진이 제공하는 원문 후보 중 가장 신뢰도가 높은 텍스트를 선택합니다.
  * 우선순위: 1. 전용 전사 엔진 결과 > 2. 타겟 언어 판별 결과에 따른 번역 엔진 입력 원문
@@ -49,9 +61,46 @@ function chooseSourceText(
 
   if (koLanguage === "ko" && enLanguage !== "ko") return koCandidate;
   if (enLanguage === "en" && koLanguage !== "en") return enCandidate;
-  
-  // 3. 판별이 불분명할 경우 텍스트 길이가 더 긴 쪽(정보량이 많은 쪽)을 선택
-  return koCandidate.length >= enCandidate.length ? koCandidate : enCandidate;
+
+  // 3. 둘 다 모호하면 원문으로 단정하지 않는다.
+  return "";
+}
+
+function chooseReadableFallback(
+  koTargetOutput: string,
+  enTargetOutput: string
+): Pick<DisplayTexts, "sourceLanguage" | "sourceText" | "koText" | "enText"> {
+  const koText = sanitizeTargetText(koTargetOutput, "ko");
+  const enText = sanitizeTargetText(enTargetOutput, "en");
+
+  if (koText && enText) {
+    return {
+      sourceLanguage: "unknown",
+      sourceText: "",
+      koText,
+      enText
+    };
+  }
+
+  if (koText) {
+    return {
+      sourceLanguage: "unknown",
+      sourceText: "",
+      koText,
+      enText: ""
+    };
+  }
+
+  if (enText) {
+    return {
+      sourceLanguage: "unknown",
+      sourceText: "",
+      koText: "",
+      enText
+    };
+  }
+
+  return { sourceLanguage: "unknown", sourceText: "", koText: "", enText: "" };
 }
 
 /** 
@@ -66,12 +115,12 @@ export function buildDisplayTexts(
     segment.sourceCandidateKo,
     segment.sourceCandidateEn
   );
-  const koTargetOutput = normalize(segment.koTargetOutput);
-  const enTargetOutput = normalize(segment.enTargetOutput);
+  const koTargetOutput = sanitizeTargetText(segment.koTargetOutput, "ko");
+  const enTargetOutput = sanitizeTargetText(segment.enTargetOutput, "en");
   const sourceLanguage = detectSourceLanguage(sourceText);
 
   if (!sourceText) {
-    return { sourceLanguage: "unknown", sourceText: "", koText: "", enText: "" };
+    return chooseReadableFallback(koTargetOutput, enTargetOutput);
   }
 
   /**
@@ -83,24 +132,25 @@ export function buildDisplayTexts(
     return {
       sourceLanguage,
       sourceText,
-      koText: sourceText,
-      enText: enTargetOutput || sourceText
+      koText: sanitizeTargetText(sourceText, "ko"),
+      enText: enTargetOutput
     };
   }
   if (sourceLanguage === "en") {
     return {
       sourceLanguage,
       sourceText,
-      koText: koTargetOutput || sourceText,
-      enText: sourceText
+      koText: koTargetOutput,
+      enText: sanitizeTargetText(sourceText, "en")
     };
   }
   
-  // 언어 판별 실패 시 원문과 가용 번역 데이터를 최대로 활용
+  // 언어 판별 실패 시에도 원문 탭에는 확인된 source만 남기고,
+  // 번역 탭에는 각 타깃 언어 결과만 싣는다.
   return {
     sourceLanguage,
     sourceText,
-    koText: koTargetOutput || sourceText,
-    enText: enTargetOutput || sourceText
+    koText: koTargetOutput,
+    enText: enTargetOutput
   };
 }
