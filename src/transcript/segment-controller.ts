@@ -34,7 +34,8 @@ export interface SegmentControllerOptions {
   sessionId: string;
   /** STT 세션 시작 절대 시각입니다. startedAtMs를 상대 시간으로 계산할 때 사용합니다. */
   organizationId: string;
-  participantUserIds: string[];
+  /** FINALIZED DTO를 만들 때 현재 인증 참가자 snapshot을 가져옵니다. */
+  getParticipantUserIds: () => string[];
   meetingStartedAtMs: number;
   /** delta가 오래 멈췄을 때 세그먼트를 마감하기 위한 타임아웃입니다. */
   noDeltaTimeoutMs: number;
@@ -130,7 +131,6 @@ export class SegmentController {
       meetingId: this.options.meetingId,
       sessionId: this.options.sessionId,
       organizationId: this.options.organizationId,
-      participantUserIds: this.options.participantUserIds,
       startedAtMs: Math.max(0, nowMs - this.options.meetingStartedAtMs),
       startedAtEpochMs: nowMs,
       sourceTranscript: "",
@@ -504,7 +504,8 @@ export class SegmentController {
       meetingId: active.meetingId,
       sessionId: active.sessionId,
       organizationId: active.organizationId,
-      participantUserIds: active.participantUserIds,
+      participantUserIds:
+        status === "FINALIZED" ? this.options.getParticipantUserIds() : [],
       sequence: this.sequence,
       startedAtMs: active.startedAtMs,
       startedAtEpochMs: active.startedAtEpochMs,

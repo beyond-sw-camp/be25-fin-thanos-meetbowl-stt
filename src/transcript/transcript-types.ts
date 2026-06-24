@@ -65,7 +65,6 @@ export interface ActiveTranscriptSegment {
   meetingId: string;
   sessionId: string;
   organizationId: string;
-  participantUserIds: string[];
   startedAtMs: number;
   startedAtEpochMs?: number;
   endedAtMs?: number;

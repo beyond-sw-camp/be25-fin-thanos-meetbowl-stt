@@ -103,6 +103,15 @@ npm run session:stop:local -- <session-id>
 npm run probe:livekit-caption -- /path/to/audio-24khz.wav stt-test-room
 ```
 
+AI 서버가 fake embedding과 전용 Qdrant collection으로 실행 중일 때, fixture 회의록 색인부터
+Redis Stream AI 결과, STT 대상 필터, 인증 사용자의 LiveKit `feedback.generated` 수신까지
+확인한다. 비대상 사용자와 Guest 차단은 participant registry와 publisher 단위 테스트에서
+별도로 검증한다.
+
+```bash
+REDIS_URL=redis://127.0.0.1:6381 npm run probe:livekit-feedback
+```
+
 ## Build
 
 ```bash

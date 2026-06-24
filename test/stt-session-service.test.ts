@@ -89,6 +89,7 @@ class TestableSttSessionService extends SttSessionService {
         organizationId: string;
         roomName: string;
         status: SttSessionView["status"];
+        runtime?: { isHealthy(): boolean };
       }
     >;
     const record = sessions.get(sessionId);
@@ -99,12 +100,7 @@ class TestableSttSessionService extends SttSessionService {
 
     // 실제 LiveKit runtime 없이도 ensureStarted의 meeting 단위 멱등성만 검증한다.
     record.status = "RUNNING";
-    (record as { runtime?: { isHealthy(): boolean; pipelineCount: number } }).runtime = {
-      isHealthy() {
-        return true;
-      },
-      pipelineCount: 0
-    };
+    record.runtime = { isHealthy: () => true };
     return {
       sessionId: record.sessionId,
       meetingId: record.meetingId,
@@ -121,14 +117,12 @@ test("ensureStarted는 같은 meetingId에서 기존 RUNNING 세션을 재사용
 
   const first = await service.ensureStarted({
     meetingId: "3ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
-    organizationId: "4ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
-    participantUserIds: ["5ef5f58f-50b2-4f0b-97bf-42e79d91ac39"],
+    organizationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
     roomName: "meeting-3ef5f58f-50b2-4f0b-97bf-42e79d91ac39"
   });
   const second = await service.ensureStarted({
     meetingId: "3ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
-    organizationId: "4ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
-    participantUserIds: ["5ef5f58f-50b2-4f0b-97bf-42e79d91ac39"],
+    organizationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
     roomName: "meeting-3ef5f58f-50b2-4f0b-97bf-42e79d91ac39"
   });
 

@@ -71,11 +71,30 @@ export class LiveKitCaptionPublisher implements CaptionPublisher {
   }
 
   /** [피드백 발행] AI 분석 서버로부터 수신된 피드백 결과를 'feedback.generated' 토픽으로 전송합니다. */
-  async publishFeedback(event: FeedbackGeneratedEnvelope): Promise<void> {
+  async publishFeedback(
+    event: FeedbackGeneratedEnvelope,
+    destinationIdentities: readonly string[]
+  ): Promise<void> {
+    if (destinationIdentities.length === 0) return;
+    const {
+      feedbackId,
+      meetingId,
+      sessionId,
+      feedbackType,
+      message,
+      sources,
+      generatedAt
+    } = event.payload;
     await this.publish("feedback.generated", {
       eventType: "feedback.generated",
-      ...event.payload
-    });
+      feedbackId,
+      meetingId,
+      sessionId,
+      feedbackType,
+      message,
+      sources,
+      generatedAt
+    }, destinationIdentities);
   }
 
   async publishMeetingEnded(message = "해당 회의는 종료되었습니다."): Promise<void> {
@@ -90,7 +109,8 @@ export class LiveKitCaptionPublisher implements CaptionPublisher {
   /** LiveKit 네이티브 SDK의 데이터 전송 기능을 호출합니다. */
   private async publish(
     topic: string,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
+    destinationIdentities?: readonly string[]
   ): Promise<void> {
     const participant = this.room.localParticipant;
     if (!participant) throw new Error("발행을 위한 로컬 참가자 객체가 존재하지 않습니다.");
@@ -99,7 +119,10 @@ export class LiveKitCaptionPublisher implements CaptionPublisher {
       new TextEncoder().encode(JSON.stringify(payload)),
       {
         reliable: true, // 전송 보장 모드 사용
-        topic
+        topic,
+        destination_identities: destinationIdentities
+          ? [...destinationIdentities]
+          : undefined
       }
     );
   }

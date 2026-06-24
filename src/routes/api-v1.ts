@@ -17,8 +17,7 @@ import {
  */
 const createSessionSchema = z.object({
   meetingId: z.string().uuid(),
-  organizationId: z.string().uuid().optional().default("00000000-0000-0000-0000-000000000000"),
-  participantUserIds: z.array(z.string().uuid()).optional().default([]),
+  organizationId: z.string().uuid(),
   roomName: z.string().min(1).max(255),
   correlationId: z.string().uuid().optional(),
   recordingEnabled: z.boolean().optional()

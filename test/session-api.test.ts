@@ -13,7 +13,6 @@ function fakeRuntime(): AppRuntime {
       create(command: {
         meetingId: string;
         organizationId: string;
-        participantUserIds: string[];
         roomName: string;
       }) {
         return {
@@ -28,7 +27,6 @@ function fakeRuntime(): AppRuntime {
       async ensureStarted(command: {
         meetingId: string;
         organizationId: string;
-        participantUserIds: string[];
         roomName: string;
       }) {
         return {
@@ -60,8 +58,7 @@ test("POST /api/v1/sessions requires the internal token", async () => {
       url: "/api/v1/sessions",
       payload: {
         meetingId: "4dd5adca-71ba-4204-a91f-e50b29bb83b9",
-        organizationId: "4dd5adca-71ba-4204-a91f-e50b29bb83b8",
-        participantUserIds: ["4dd5adca-71ba-4204-a91f-e50b29bb83b7"],
+        organizationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
         roomName: "meeting-room"
       }
     });
@@ -83,8 +80,7 @@ test("POST /api/v1/sessions returns the standard success envelope", async () => 
       },
       payload: {
         meetingId: "4dd5adca-71ba-4204-a91f-e50b29bb83b9",
-        organizationId: "4dd5adca-71ba-4204-a91f-e50b29bb83b8",
-        participantUserIds: ["4dd5adca-71ba-4204-a91f-e50b29bb83b7"],
+        organizationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
         roomName: "meeting-room"
       }
     });
@@ -94,7 +90,7 @@ test("POST /api/v1/sessions returns the standard success envelope", async () => 
       data: {
         sessionId: "0de73437-e29f-4cb3-82fd-32b1478d66ad",
         meetingId: "4dd5adca-71ba-4204-a91f-e50b29bb83b9",
-        organizationId: "4dd5adca-71ba-4204-a91f-e50b29bb83b8",
+        organizationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
         roomName: "meeting-room",
         status: "CREATED",
         pipelineCount: 0
@@ -117,39 +113,13 @@ test("POST /api/v1/sessions/ensure-started returns a running session envelope", 
       },
       payload: {
         meetingId: "4dd5adca-71ba-4204-a91f-e50b29bb83b9",
-        organizationId: "4dd5adca-71ba-4204-a91f-e50b29bb83b8",
-        participantUserIds: ["4dd5adca-71ba-4204-a91f-e50b29bb83b7"],
+        organizationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
         roomName: "meeting-room"
       }
     });
     assert.equal(response.statusCode, 200);
     assert.equal(response.json().data.status, "RUNNING");
     assert.equal(response.json().data.pipelineCount, 1);
-  } finally {
-    await app.close();
-  }
-});
-
-test("POST /api/v1/sessions/ensure-started accepts the minimal join payload", async () => {
-  const app = createApp({ runtime: fakeRuntime() });
-  try {
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/v1/sessions/ensure-started",
-      headers: {
-        "x-internal-token": "test-internal-token"
-      },
-      payload: {
-        meetingId: "4dd5adca-71ba-4204-a91f-e50b29bb83b9",
-        roomName: "meeting-room"
-      }
-    });
-    assert.equal(response.statusCode, 200);
-    assert.equal(
-      response.json().data.organizationId,
-      "00000000-0000-0000-0000-000000000000"
-    );
-    assert.equal(response.json().data.status, "RUNNING");
   } finally {
     await app.close();
   }

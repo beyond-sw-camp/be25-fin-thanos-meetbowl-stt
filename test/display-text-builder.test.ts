@@ -12,7 +12,6 @@ function segment(
     meetingId: "meeting-id",
     sessionId: "session-id",
     organizationId: "organization-id",
-    participantUserIds: [],
     startedAtMs: 0,
     sourceTranscript: "",
     sourceCandidateKo: "",

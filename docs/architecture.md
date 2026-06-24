@@ -294,7 +294,7 @@ FR-149
 
 ```text
 meetbowl-stt
-  ↓ meeting.feedback.segment.created(finalized segment)
+  ↓ meeting.feedback.segment.created(finalized segment + authenticated user snapshot)
 Redis Stream
   ↓
 meetbowl-ai
@@ -309,6 +309,10 @@ Transcript는 사용자 화면 자막 표시용이며 AI 피드백 입력으로 
 `meetbowl-stt`는 transcript window를 구성하지 않으며 `meetbowl-ai`가 meeting별
 rolling buffer/window를 구성한다.
 
+`participantUserIds`는 segment 확정 시점의 LiveKit `room.remoteParticipants`와
+participant 연결/해제 이벤트를 기준으로 구성한다. BE가 발급한 토큰의 `user-{userId}`
+identity만 인증 사용자로 인정하고 Guest와 server participant는 제외한다.
+
 ## 10.1 실시간 피드백 화면 전달 흐름
 
 ```text
@@ -317,11 +321,13 @@ meetbowl-ai
 Redis Stream
   ↓
 meetbowl-stt
-  ↓ LiveKit DataChannel: feedback.generated
+  ↓ audienceUserIds 대상 LiveKit DataChannel: feedback.generated
 meetbowl-fe
 ```
 
-`meetbowl-stt`는 피드백을 생성하지 않지만, AI 서버가 생성한 피드백 결과를 구독해 회의 참여자에게 LiveKit DataChannel로 전달한다.
+`meetbowl-stt`는 피드백을 생성하지 않는다. AI 결과의 `audienceUserIds`와 현재 LiveKit
+인증 사용자 identity의 교집합에만 DataChannel로 전달한다. 따라서 Guest, 퇴장 사용자,
+분석 이후 새로 입장한 사용자에게 기존 피드백을 전달하지 않는다.
 
 ---
 

@@ -104,7 +104,6 @@ X-Internal-Token: {internalToken}
 {
   "meetingId": "uuid",
   "organizationId": "uuid",
-  "participantUserIds": ["uuid", "uuid"],
   "roomName": "livekit-room-name",
   "recordingEnabled": true
 }
@@ -134,6 +133,7 @@ X-Internal-Token: {internalToken}
 ```json
 {
   "meetingId": "uuid",
+  "organizationId": "uuid",
   "roomName": "livekit-room-name",
   "recordingEnabled": false
 }
@@ -222,6 +222,10 @@ STT 서버는 finalized segment 전체 목록을 보관하지 않는다. REST AP
   }
 }
 ```
+
+`participantUserIds`는 segment 확정 시점에 LiveKit Room에 접속 중인 `user-{userId}`
+identity에서 추출한다. Guest와 server participant는 포함하지 않는다. 인증 사용자가 한
+명도 없으면 피드백 입력 이벤트를 발행하지 않는다.
 
 ---
 
@@ -316,11 +320,16 @@ Redis Stream은 장기 보관 용도로 사용하지 않는다.
 
 ## 9.1 Redis Stream Consumer
 
-`meetbowl-stt`는 AI 서버가 생성한 실시간 피드백 결과를 Redis Stream에서 구독하고, LiveKit DataChannel로 회의 참여자에게 전달한다.
+`meetbowl-stt`는 AI 서버가 생성한 실시간 피드백 결과를 Redis Stream에서 구독하고,
+payload의 `audienceUserIds`와 현재 인증 사용자 identity를 대조해 일치하는 대상에게만
+LiveKit DataChannel로 전달한다.
 
 | Stream | Event | 처리 |
 |---|---|---|
 | `meeting:{meetingId}:feedback-result` | `meeting.feedback.generated` | LiveKit DataChannel `feedback.generated`로 전달 |
+
+AI가 유사 논의를 찾지 못하거나 발행 기준을 통과하지 못하면 결과 Stream 이벤트가
+생성되지 않으며, `meetbowl-stt`도 DataChannel 이벤트를 발행하지 않는다.
 
 ---
 
