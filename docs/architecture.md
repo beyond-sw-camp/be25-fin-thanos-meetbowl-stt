@@ -19,7 +19,7 @@ LiveKit 회의 음성 트랙을 수신하고, STT Provider로 전달하여 실�
 - STT Provider 실시간 스트리밍 연결
 - Interim/Partial Transcript 처리
 - Final Transcript 처리
-- 한국어/영어 자막 이벤트 발행
+- 실시간 STT 자막 이벤트 발행
 - KOR/ENG 자막 표시 언어 전환 지원
 - 회의 녹음 세션 제어 보조
 - LiveKit DataChannel로 화면 자막과 실시간 피드백 전달
@@ -49,21 +49,16 @@ meetbowl-stt
 
 회의 음성 트랙의 출처다.
 
-`meetbowl-stt`는 LiveKit Room에 bot 또는 server participant 형태로 참여하거나, LiveKit Egress/Track Subscription 구조를 통해 음성을 수신한다.
+`meetbowl-stt`는 LiveKit Room에 server participant로 참여하고 모든 remote participant
+audio track을 개별 subscribe한다. Room 전체 mixed audio는 처리하지 않는다.
 
 ### STT Provider
 
 음성을 텍스트로 변환하는 외부 Provider다.
 
-후보:
-
-- Deepgram
-- Clova
-- Tiro
-- AssemblyAI
-- Whisper API
-
-Provider는 교체 가능해야 한다.
+초기 Provider는 OpenAI Realtime STT와 OpenAI Realtime Translation 조합이다.
+participant audio track마다 원문 transcription session을 우선 두고, 필요할 때만
+한국어/영어 translation session을 덧붙인다. Provider 호출은 adapter 내부에 숨긴다.
 
 ### LiveKit DataChannel
 
@@ -71,8 +66,8 @@ Provider는 교체 가능해야 한다.
 
 사용 예시:
 
-- 한국어 자막 표시
-- 영어 번역 자막 표시
+- STT 원문 자막 표시
+- 한국어/영어 번역 자막 보조 표시
 - KOR/ENG 표시 언어 전환 결과 전달
 - AI 실시간 피드백 표시
 - 회의 참여자 간 실시간 채팅 표시
@@ -86,7 +81,7 @@ Provider는 교체 가능해야 한다.
 
 사용 예시:
 
-- AI 피드백 입력용 Final Transcript window
+- AI 피드백 입력용 finalized segment
 - 회의 중 상태 이벤트
 - 실시간 피드백 요청
 
@@ -137,7 +132,7 @@ event publisher
 - STT 세션 시작
 - STT 세션 종료
 - 회의 ID와 LiveKit Room 매핑
-- 참가자와 speaker 매핑
+- 참가자 audio track과 내부 pipeline 매핑
 - Provider 연결 상태 관리
 - 자막 표시 언어 관리
 
@@ -149,8 +144,8 @@ event publisher
 
 - audio frame 수신
 - provider stream 전송
-- interim/final 결과 구분
-- speaker 정보 매핑
+- Translation input/output delta 병합
+- Meetbowl finalization 기준 적용
 - timestamp 정규화
 - 언어 코드 정규화
 
@@ -224,10 +219,11 @@ Transcript는 두 종류로 구분한다.
 
 특징:
 
-- STT Provider가 확정한 문장이다.
+- Meetbowl finalizer가 VAD silence, no delta timeout, translation grace time,
+  max segment duration 또는 meeting 종료로 확정한 segment다.
 - DB 저장 대상이다.
 - RabbitMQ 이벤트로 `meetbowl-be`에 전달한다.
-- AI 피드백 입력용 `meeting.feedback.requested` Redis Stream 이벤트의 기준 데이터다.
+- AI 피드백 입력용 `meeting.feedback.segment.created` Redis Stream 이벤트의 기준 데이터다.
 - 중복 저장 방지를 위한 idempotency key가 필요하다.
 
 ---
@@ -244,17 +240,19 @@ NFR-042
 
 ```text
 LiveKit Room
-  ↓ participant audio track
+  ↓ participant별 audio track
 meetbowl-stt
-  ↓ STT Provider streaming
-STT Provider
-  ↓ interim result
-meetbowl-stt
+  ├─ OpenAI Transcription source transcript
+  ├─ OpenAI Translation target=ko
+  └─ OpenAI Translation target=en
+  ↓ language/text canonical caption 생성
   ├─ LiveKit DataChannel: caption.updated
-  └─ Redis Stream: meeting.feedback.requested(final transcript only)
+  ├─ RabbitMQ: transcript.final.created(finalized only)
+  └─ Redis Stream: meeting.feedback.segment.created(finalized only)
 ```
 
-KOR/ENG 버튼은 화면 표시 언어를 변경한다.
+KOR/ENG 버튼은 화면 표시 언어를 변경한다. 기본 표시는 STT 원문 자막이며, 번역은
+보조 출력으로만 사용한다.
 
 STT 원문 언어와 표시 언어는 분리한다.
 
@@ -270,10 +268,9 @@ FR-039
 ```
 
 ```text
-STT Provider
-  ↓ final result
+Meetbowl segment finalizer
+  ↓ finalized segment
 meetbowl-stt
-  ↓ normalize transcript
   ↓ transcript.final.created event
 RabbitMQ
   ↓
@@ -297,7 +294,7 @@ FR-149
 
 ```text
 meetbowl-stt
-  ↓ meeting.feedback.requested(final transcript window)
+  ↓ meeting.feedback.segment.created(finalized segment + authenticated user snapshot)
 Redis Stream
   ↓
 meetbowl-ai
@@ -307,7 +304,14 @@ meetbowl-ai
 
 피드백 생성은 `meetbowl-ai`가 담당한다.
 
-AI 피드백 입력에는 STT Provider가 확정한 Final Transcript만 사용한다. Interim/Partial Transcript는 사용자 화면 자막 표시용이며 AI 피드백 입력으로 발행하지 않는다.
+AI 피드백 입력에는 Meetbowl finalizer가 확정한 segment만 사용한다. Interim/Partial
+Transcript는 사용자 화면 자막 표시용이며 AI 피드백 입력으로 발행하지 않는다.
+`meetbowl-stt`는 transcript window를 구성하지 않으며 `meetbowl-ai`가 meeting별
+rolling buffer/window를 구성한다.
+
+`participantUserIds`는 segment 확정 시점의 LiveKit `room.remoteParticipants`와
+participant 연결/해제 이벤트를 기준으로 구성한다. BE가 발급한 토큰의 `user-{userId}`
+identity만 인증 사용자로 인정하고 Guest와 server participant는 제외한다.
 
 ## 10.1 실시간 피드백 화면 전달 흐름
 
@@ -317,11 +321,13 @@ meetbowl-ai
 Redis Stream
   ↓
 meetbowl-stt
-  ↓ LiveKit DataChannel: feedback.generated
+  ↓ audienceUserIds 대상 LiveKit DataChannel: feedback.generated
 meetbowl-fe
 ```
 
-`meetbowl-stt`는 피드백을 생성하지 않지만, AI 서버가 생성한 피드백 결과를 구독해 회의 참여자에게 LiveKit DataChannel로 전달한다.
+`meetbowl-stt`는 피드백을 생성하지 않는다. AI 결과의 `audienceUserIds`와 현재 LiveKit
+인증 사용자 identity의 교집합에만 DataChannel로 전달한다. 따라서 Guest, 퇴장 사용자,
+분석 이후 새로 입장한 사용자에게 기존 피드백을 전달하지 않는다.
 
 ---
 
@@ -331,7 +337,7 @@ meetbowl-fe
 LiveKit participant all left or meetbowl-be meeting end request
   ↓
 meetbowl-stt stop session
-  ↓ provider stream close
+  ↓ Translation session.close
   ↓ pending final transcript flush
   ↓ transcript.final.created events
   ↓ recording.completed event
@@ -349,36 +355,40 @@ meetbowl-be
 Provider 교체를 쉽게 하기 위해 공통 interface를 둔다.
 
 ```text
-SttProvider interface
-  ├─ DeepgramProvider
-  ├─ ClovaProvider
-  ├─ TiroProvider
-  ├─ AssemblyAiProvider
-  └─ WhisperProvider
+TranslationProvider interface
+  └─ OpenAiRealtimeTranslationProvider
 ```
 
 Session Service는 특정 Provider SDK에 직접 의존하지 않는다.
 
 ---
 
-## 13. 언어 및 번역 처리
+## 13. 언어 및 자막 처리
 
 STT 원문 언어와 표시 언어를 분리한다.
 
-예시:
+각 participant pipeline은 동일 audio를 transcription session에 우선 전달하고, 번역은
+보조 출력이 필요할 때만 translation session에 전달한다.
 
 ```text
-sourceLanguage: ko
-captionLanguage: en
+sourceLanguage=ko -> koText=sourceText, enText=영어 번역 출력
+sourceLanguage=en -> koText=한국어 번역 출력, enText=sourceText
+sourceLanguage=unknown -> koText=한국어 번역 출력, enText=영어 번역 출력
 ```
 
-STT Provider가 번역 자막을 지원하면 `meetbowl-stt`의 Provider Adapter에서 처리할 수 있다.
+source transcript는 transcription session의 completed transcript를 우선 사용하고,
+translation session의 source delta는 보조 후보로만 사용한다.
 
-LLM 또는 고급 번역 Provider가 필요하면 `meetbowl-ai`로 위임한다.
+## 14. 메모리 및 화자 식별 원칙
+
+- participant identity와 track SID는 내부 pipeline 구분에만 사용한다.
+- 화자 식별자와 이름을 DataChannel, RabbitMQ, Redis Stream payload에 포함하지 않는다.
+- speaker별 active segment, sequence counter, 연결 상태만 메모리에 유지한다.
+- 회의 전체 원문, finalized segment 전체 목록, AI 피드백 window를 보관하지 않는다.
 
 ---
 
-## 14. 장애 처리 원칙
+## 15. 장애 처리 원칙
 
 STT Provider 오류 발생 시 다음을 수행한다.
 
@@ -391,7 +401,7 @@ STT Provider 오류 발생 시 다음을 수행한다.
 
 ---
 
-## 15. 금지 사항
+## 16. 금지 사항
 
 - MariaDB 직접 접근 금지
 - Interim/Partial Transcript DB 저장 금지
@@ -400,3 +410,6 @@ STT Provider 오류 발생 시 다음을 수행한다.
 - 회의 권한을 `meetbowl-stt` 단독으로 최종 판단 금지
 - `meetbowl-stt`의 회의 채팅 내용 저장 금지
 - 장기 보관 데이터를 Redis Stream에 의존 금지
+- LiveKit Room 전체 mixed audio 처리 금지
+- 화자 식별자를 외부 자막/메시지 계약에 노출 금지
+- AI 피드백용 rolling window 구성 금지

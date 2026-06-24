@@ -12,7 +12,7 @@
 - Final Transcript 생성
 - 실시간 자막 전달
 - AI 실시간 피드백 결과 전달
-- 실시간 번역 자막 전달
+- 실시간 STT 자막과 보조 번역 자막 전달
 - KOR/ENG 자막 표시 언어 전환
 - 회의 종료 후 Final Transcript 전달
 - 녹음 파일 저장 요청 또는 녹음 메타데이터 전달
@@ -90,8 +90,10 @@ X-Internal-Token: {internalToken}
 | Method | Endpoint | 설명 | 호출 주체 |
 |---|---|---|---|
 | POST | `/sessions` | STT 세션 생성 | meetbowl-be |
+| POST | `/sessions/ensure-started` | meeting 기준으로 STT 세션 생성 및 시작을 멱등하게 보장 | meetbowl-be |
 | POST | `/sessions/{sessionId}/start` | STT 세션 시작 | meetbowl-be/System |
 | POST | `/sessions/{sessionId}/stop` | STT 세션 종료 | meetbowl-be/System |
+| POST | `/sessions/meetings/{meetingId}/stop` | 회의 기준으로 활성 STT 세션 종료 | meetbowl-be |
 | GET | `/sessions/{sessionId}` | STT 세션 상태 조회 | meetbowl-be |
 
 ### POST `/sessions`
@@ -101,17 +103,9 @@ X-Internal-Token: {internalToken}
 ```json
 {
   "meetingId": "uuid",
+  "organizationId": "uuid",
   "roomName": "livekit-room-name",
-  "recordingEnabled": true,
-  "sourceLanguage": "ko",
-  "captionLanguages": ["ko", "en"],
-  "participants": [
-    {
-      "userId": "uuid",
-      "livekitIdentity": "user-uuid",
-      "name": "홍길동"
-    }
-  ]
+  "recordingEnabled": true
 }
 ```
 
@@ -123,11 +117,68 @@ X-Internal-Token: {internalToken}
   "data": {
     "sessionId": "uuid",
     "meetingId": "uuid",
+    "organizationId": "uuid",
     "status": "CREATED"
   },
   "message": null
 }
 ```
+
+---
+
+### POST `/sessions/ensure-started`
+
+#### Request
+
+```json
+{
+  "meetingId": "uuid",
+  "organizationId": "uuid",
+  "roomName": "livekit-room-name",
+  "recordingEnabled": false
+}
+```
+
+#### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "sessionId": "uuid",
+    "meetingId": "uuid",
+    "roomName": "livekit-room-name",
+    "status": "RUNNING",
+    "pipelineCount": 1
+  },
+  "message": null
+}
+```
+
+동일 `meetingId`로 같은 요청이 반복되면 기존 RUNNING 세션을 재사용한다. `meetbowl-be`는 회의 입장 시 이 API를 먼저 호출해 자막 세션을 준비한다.
+
+---
+
+### POST `/sessions/meetings/{meetingId}/stop`
+
+회의 종료 authoritative state가 `meetbowl-be`에서 확정된 뒤 호출한다.
+
+#### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "meetingId": "uuid",
+    "sessionId": "uuid",
+    "status": "STOPPED",
+    "stopped": true
+  },
+  "message": null
+}
+```
+
+이 경로는 STT 서버가 마지막 active segment flush와 `meeting.ended` DataChannel 브로드캐스트를 수행한 뒤 세션을 정리하는 용도다.
 
 ---
 
@@ -139,12 +190,12 @@ Interim/Partial Transcript는 저장하지 않는다.
 
 운영 기본 경로는 RabbitMQ `transcript.final.created` 이벤트 발행이다.
 
-아래 REST API는 상태 조회, 누락된 Final Transcript 강제 flush, 장애 대응용 수동 재처리 용도로만 사용한다.
+STT 서버는 finalized segment 전체 목록을 보관하지 않는다. REST API는 session 상태와
+현재 active segment flush를 위한 장애 대응 용도로만 사용한다.
 
 | Method | Endpoint | 설명 | 호출 주체 |
 |---|---|---|---|
-| GET | `/sessions/{sessionId}/transcripts/final` | 세션 Final Transcript 조회 | meetbowl-be |
-| POST | `/sessions/{sessionId}/transcripts/final/flush` | 누적 Final Transcript 강제 전달 | meetbowl-be/System |
+| POST | `/sessions/{sessionId}/transcripts/final/flush` | active segment 강제 확정/전달 | meetbowl-be/System |
 
 ### Final Transcript Event Payload
 
@@ -159,17 +210,22 @@ Interim/Partial Transcript는 저장하지 않는다.
   "payload": {
     "meetingId": "uuid",
     "sessionId": "uuid",
-    "speakerId": "speaker-1",
-    "speakerName": "홍길동",
+    "segmentId": "uuid",
+    "sequence": 12,
     "language": "ko",
+    "text": "오늘 회의 안건은 배포 일정입니다.",
     "startedAtMs": 1000,
     "endedAtMs": 5000,
-    "text": "오늘 회의 안건은 배포 일정입니다.",
-    "provider": "deepgram",
-    "idempotencyKey": "uuid"
+    "provider": "openai-realtime-transcription",
+    "finalizationReason": "VAD_SILENCE",
+    "idempotencyKey": "segmentId"
   }
 }
 ```
+
+`participantUserIds`는 segment 확정 시점에 LiveKit Room에 접속 중인 `user-{userId}`
+identity에서 추출한다. Guest와 server participant는 포함하지 않는다. 인증 사용자가 한
+명도 없으면 피드백 입력 이벤트를 발행하지 않는다.
 
 ---
 
@@ -177,35 +233,29 @@ Interim/Partial Transcript는 저장하지 않는다.
 
 실시간 자막 화면 전달은 LiveKit DataChannel을 기본으로 한다. AI 실시간 피드백도 `meetbowl-stt`가 LiveKit DataChannel로 전달한다.
 
-REST API는 자막 표시 언어 변경과 상태 조회 용도로 둔다.
-
-| Method | Endpoint | 설명 | 호출 주체 |
-|---|---|---|---|
-| PATCH | `/sessions/{sessionId}/caption-language` | 회의 자막 표시 언어 변경 | meetbowl-be |
-| GET | `/sessions/{sessionId}/caption-language` | 현재 자막 표시 언어 조회 | meetbowl-be |
-
-지원 언어:
-
-```text
-ko
-en
-```
+각 segment의 `text`와 `sourceText`를 원문 자막 기준으로 생성한다. 번역 탭 표시를 위해
+`koText`, `enText`를 함께 제공할 수 있으며, 이전 클라이언트 호환 기간에는
+`sourceLanguage`, `sourceTranscript`도 함께 제공한다. 저장과 피드백 입력은
+`text`, `language`를 기준으로 한다.
 
 ### Caption Event
 
 ```json
 {
-  "eventId": "uuid",
+  "eventType": "caption.updated",
   "meetingId": "uuid",
   "sessionId": "uuid",
-  "speakerId": "speaker-1",
-  "speakerName": "홍길동",
-  "sourceLanguage": "ko",
-  "displayLanguage": "en",
-  "text": "The agenda for today's meeting is the deployment schedule.",
-  "isFinal": false,
+  "segmentId": "uuid",
+  "sequence": 12,
+  "status": "STREAMING",
+  "language": "ko",
+  "text": "오늘 회의 안건은 배포 일정입니다.",
+  "sourceText": "오늘 회의 안건은 배포 일정입니다.",
+  "koText": "오늘 회의 안건은 배포 일정입니다.",
+  "enText": "Today's agenda is the deployment schedule.",
   "startedAtMs": 1000,
-  "endedAtMs": 5000
+  "endedAtMs": null,
+  "updatedAt": "2026-06-02T01:00:00Z"
 }
 ```
 
@@ -223,6 +273,7 @@ en
 | `caption.language.changed` | 자막 표시 언어 변경 |
 | `stt.status.changed` | STT 상태 변경 |
 | `feedback.generated` | 화면 표시용 AI 실시간 피드백 |
+| `meeting.ended` | 서버 기준 회의 종료 브로드캐스트 |
 
 ---
 
@@ -230,22 +281,55 @@ en
 
 `meetbowl-stt`는 서버 내부 실시간성이 필요한 이벤트를 Redis Stream으로 발행한다.
 
-AI 피드백 입력에는 STT Provider가 확정한 Final Transcript만 사용한다. Interim/Partial Transcript는 LiveKit DataChannel을 통한 화면 자막 표시용이며 Redis Stream으로 AI 서버에 발행하지 않는다.
+AI 피드백 입력에는 Meetbowl finalizer가 확정한 segment만 사용한다. Interim/Partial
+Transcript는 LiveKit DataChannel을 통한 화면 자막 표시용이며 Redis Stream으로
+AI 서버에 발행하지 않는다.
 
 | Stream | Event | 설명 |
 |---|---|---|
-| `meeting:{meetingId}:feedback-source` | `meeting.feedback.requested` | Final Transcript 기반 AI 피드백 분석 요청 |
+| `meeting:{meetingId}:feedback-source` | `meeting.feedback.segment.created` | Finalized segment 단위 AI 피드백 입력 |
 | `meeting:{meetingId}:status` | `stt.status.changed` | 회의 중 STT 상태 이벤트 |
 
 Redis Stream은 장기 보관 용도로 사용하지 않는다.
 
+### Feedback Segment Event Payload
+
+```json
+{
+  "eventId": "uuid",
+  "eventType": "meeting.feedback.segment.created",
+  "occurredAt": "2026-06-02T01:00:00Z",
+  "producer": "stt-server",
+  "version": 1,
+  "correlationId": "uuid",
+  "payload": {
+    "meetingId": "uuid",
+    "sessionId": "uuid",
+    "organizationId": "uuid",
+    "participantUserIds": ["uuid", "uuid"],
+    "segmentId": "uuid",
+    "sequence": 12,
+    "language": "ko",
+    "text": "오늘 회의 안건은 배포 일정입니다.",
+    "isFinal": true,
+    "startedAtMs": 1000,
+    "endedAtMs": 5000
+  }
+}
+```
+
 ## 9.1 Redis Stream Consumer
 
-`meetbowl-stt`는 AI 서버가 생성한 실시간 피드백 결과를 Redis Stream에서 구독하고, LiveKit DataChannel로 회의 참여자에게 전달한다.
+`meetbowl-stt`는 AI 서버가 생성한 실시간 피드백 결과를 Redis Stream에서 구독하고,
+payload의 `audienceUserIds`와 현재 인증 사용자 identity를 대조해 일치하는 대상에게만
+LiveKit DataChannel로 전달한다.
 
 | Stream | Event | 처리 |
 |---|---|---|
 | `meeting:{meetingId}:feedback-result` | `meeting.feedback.generated` | LiveKit DataChannel `feedback.generated`로 전달 |
+
+AI가 유사 논의를 찾지 못하거나 발행 기준을 통과하지 못하면 결과 Stream 이벤트가
+생성되지 않으며, `meetbowl-stt`도 DataChannel 이벤트를 발행하지 않는다.
 
 ---
 

@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+.git
+.idea
+dist
+node_modules
+test
