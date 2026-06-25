@@ -27,6 +27,7 @@ function createDependencies(): SttSessionServiceDependencies {
       OPENAI_REALTIME_TRANSLATION_MODEL: "gpt-realtime-translate",
       OPENAI_REALTIME_TRANSCRIPTION_MODEL: "gpt-realtime-whisper",
       OPENAI_REALTIME_TRANSCRIPTION_DELAY: "low",
+      OPENAI_REALTIME_SESSION_ROTATION_MS: 3300000,
       RABBITMQ_URL: "amqp://localhost",
       RABBITMQ_EXCHANGE: "meetbowl.topic",
       REDIS_URL: "redis://localhost:6379",
@@ -128,4 +129,43 @@ test("ensureStarted는 같은 meetingId에서 기존 RUNNING 세션을 재사용
 
   assert.equal(first.sessionId, second.sessionId);
   assert.equal(service.startedSessions.length, 1);
+});
+
+test("ensureStarted는 provider 또는 runtime이 unhealthy면 같은 meetingId 세션을 재기동한다", async () => {
+  const service = new TestableSttSessionService(createDependencies());
+
+  const first = await service.ensureStarted({
+    meetingId: "8ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
+    organizationId: "9ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
+    roomName: "meeting-8ef5f58f-50b2-4f0b-97bf-42e79d91ac39"
+  });
+
+  const sessions = Reflect.get(service as object, "sessions") as Map<
+    string,
+    {
+      runtime?: { isHealthy(): boolean; pipelineCount: number };
+      status: SttSessionView["status"];
+    }
+  >;
+  const record = sessions.get(first.sessionId);
+  if (!record?.runtime) {
+    throw new Error("runtime should exist after first start");
+  }
+
+  record.runtime = {
+    isHealthy() {
+      return false;
+    },
+    pipelineCount: 0
+  };
+  record.status = "RUNNING";
+
+  const second = await service.ensureStarted({
+    meetingId: "8ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
+    organizationId: "9ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
+    roomName: "meeting-8ef5f58f-50b2-4f0b-97bf-42e79d91ac39"
+  });
+
+  assert.equal(first.sessionId, second.sessionId);
+  assert.equal(service.startedSessions.length, 2);
 });

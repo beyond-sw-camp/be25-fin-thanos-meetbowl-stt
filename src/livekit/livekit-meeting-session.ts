@@ -28,7 +28,10 @@ import type {
 } from "../providers/translation-provider.js";
 import type { FinalizationReason } from "../transcript/transcript-types.js";
 import { LiveKitCaptionPublisher } from "./livekit-caption-publisher.js";
-import { LiveKitParticipantRegistry } from "./livekit-participant-registry.js";
+import {
+  LiveKitParticipantRegistry,
+  type ParticipantRegistrySyncSummary
+} from "./livekit-participant-registry.js";
 import {
   ParticipantAudioPipeline,
   type PipelineLogger
@@ -172,6 +175,7 @@ export class LiveKitMeetingSession {
       })
       .on(RoomEvent.Reconnected, () => {
         this.connectionHealthy = true;
+        this.reconcileParticipantRegistry("reconnected");
         this.options.logger.info(
           {
             meetingId: this.options.meetingId,
@@ -202,7 +206,7 @@ export class LiveKitMeetingSession {
     this.connectionHealthy = true;
 
     // 6. 기존 접속자 identity와 트랙 상태 동기화 및 기본 트랙 연결 시도
-    this.syncExistingParticipants();
+    this.reconcileParticipantRegistry("connected");
     await this.syncExistingRemoteAudioPublications();
     await this.ensureDefaultTrackAttached();
     
@@ -255,7 +259,7 @@ export class LiveKitMeetingSession {
    * STT 세션 서비스는 이 값을 보고 stale RUNNING 세션을 재사용하지 않고 새로 시작한다.
    */
   isHealthy(): boolean {
-    return this.connectionHealthy;
+    return this.connectionHealthy && (this.pipeline?.isHealthy() ?? false);
   }
 
   /** 진행 중인 미완성 자막을 즉시 최종 데이터로 발행 요청합니다. */
@@ -276,12 +280,13 @@ export class LiveKitMeetingSession {
       meetingId: this.options.meetingId,
       sessionId: this.options.sessionId,
       organizationId: this.options.organizationId,
-      getParticipantUserIds: () => this.participantRegistry.snapshotUserIds(),
+      getParticipantUserIds: () => this.snapshotParticipantUserIdsForFinalization(),
       correlationId: this.options.correlationId,
       meetingStartedAtMs: this.startedAtMs,
       nextSequence: () => this.sequence++,
       translationProvider: this.options.translationProvider,
       transcriptionProvider: this.options.transcriptionProvider,
+      sessionRotationMs: this.options.config.OPENAI_REALTIME_SESSION_ROTATION_MS,
       enableTranslation: this.options.config.ENABLE_TRANSLATION,
       captionPublisher: this.captionPublisher,
       finalSegmentPublisher: new CompositeFinalSegmentPublisher([
@@ -299,11 +304,67 @@ export class LiveKitMeetingSession {
     });
   }
 
-  /** Room 접속 이전부터 존재하던 인증 참가자를 registry에 반영합니다. */
-  private syncExistingParticipants(): void {
-    for (const participant of this.room.remoteParticipants.values()) {
-      this.participantRegistry.add(participant.identity);
+  /** 현재 LiveKit Room 상태를 기준으로 인증 참가자 registry를 재구성합니다. */
+  private reconcileParticipantRegistry(
+    reason: "connected" | "reconnected" | "finalized-segment" | "feedback-delivery"
+  ): ParticipantRegistrySyncSummary | undefined {
+    if (!this.connectionHealthy) {
+      this.options.logger.warn(
+        {
+          meetingId: this.options.meetingId,
+          sessionId: this.options.sessionId,
+          reason,
+          cachedAuthenticatedParticipantCount:
+            this.participantRegistry.snapshotUserIds().length
+        },
+        "LiveKit 연결이 불안정하여 기존 참가자 registry를 유지"
+      );
+      return undefined;
     }
+
+    const summary = this.participantRegistry.replace(
+      [...this.room.remoteParticipants.values()].map((participant) => participant.identity)
+    );
+    const registryChanged =
+      summary.addedCount > 0 ||
+      summary.removedCount > 0 ||
+      summary.replacedCount > 0;
+
+    if (reason !== "finalized-segment" || registryChanged) {
+      this.options.logger.info(
+        {
+          meetingId: this.options.meetingId,
+          sessionId: this.options.sessionId,
+          reason,
+          roomParticipantCount: summary.roomParticipantCount,
+          authenticatedParticipantCount: summary.authenticatedParticipantCount,
+          ignoredParticipantCount: summary.ignoredParticipantCount,
+          addedCount: summary.addedCount,
+          removedCount: summary.removedCount,
+          replacedCount: summary.replacedCount
+        },
+        "LiveKit 참가자 registry 동기화 완료"
+      );
+    }
+
+    return summary;
+  }
+
+  /** finalized segment에 귀속될 인증 참가자 스냅샷을 현재 Room 기준으로 확보합니다. */
+  private snapshotParticipantUserIdsForFinalization(): string[] {
+    const syncSummary = this.reconcileParticipantRegistry("finalized-segment");
+    const participantUserIds = this.participantRegistry.snapshotUserIds();
+    this.options.logger.info(
+      {
+        meetingId: this.options.meetingId,
+        sessionId: this.options.sessionId,
+        participantUserCount: participantUserIds.length,
+        roomParticipantCount: syncSummary?.roomParticipantCount,
+        authenticatedParticipantCount: syncSummary?.authenticatedParticipantCount
+      },
+      "Finalized segment용 참가자 스냅샷 확보"
+    );
+    return participantUserIds;
   }
 
   /** 이미 발행된 오디오 트랙 정보가 누락되지 않도록 현재 Room 상태와 동기화합니다. */
@@ -418,11 +479,55 @@ export class LiveKitMeetingSession {
       );
       return;
     }
+    this.reconcileParticipantRegistry("feedback-delivery");
     const destinationIdentities = this.participantRegistry.identitiesForUserIds(
       event.payload.audienceUserIds
     );
-    if (destinationIdentities.length === 0) return;
+    const authenticatedParticipantCount = this.participantRegistry.snapshotUserIds().length;
+    const excludedAudienceCount =
+      event.payload.audienceUserIds.length - destinationIdentities.length;
+    if (destinationIdentities.length === 0) {
+      this.options.logger.warn(
+        {
+          meetingId: this.options.meetingId,
+          sessionId: this.options.sessionId,
+          feedbackId: event.payload.feedbackId,
+          audienceCount: event.payload.audienceUserIds.length,
+          destinationCount: destinationIdentities.length,
+          excludedAudienceCount,
+          authenticatedParticipantCount
+        },
+        "피드백 전달 대상 인증 참가자를 찾지 못해 DataChannel 발행 생략"
+      );
+      return;
+    }
+    if (excludedAudienceCount > 0) {
+      this.options.logger.warn(
+        {
+          meetingId: this.options.meetingId,
+          sessionId: this.options.sessionId,
+          feedbackId: event.payload.feedbackId,
+          audienceCount: event.payload.audienceUserIds.length,
+          destinationCount: destinationIdentities.length,
+          excludedAudienceCount,
+          authenticatedParticipantCount
+        },
+        "일부 피드백 대상 사용자가 현재 LiveKit 인증 참가자 집합에서 제외됨"
+      );
+    }
     await this.captionPublisher?.publishFeedback(event, destinationIdentities);
+    this.options.logger.info(
+      {
+        meetingId: this.options.meetingId,
+        sessionId: this.options.sessionId,
+        feedbackId: event.payload.feedbackId,
+        audienceCount: event.payload.audienceUserIds.length,
+        destinationCount: destinationIdentities.length,
+        excludedAudienceCount,
+        authenticatedParticipantCount
+      },
+      "AI 피드백 DataChannel 발행 완료"
+    );
   }
 
   /** Active speaker 이벤트는 관측용으로만 유지합니다. 실제 STT 입력 선택은 RMS 기반으로 수행합니다. */

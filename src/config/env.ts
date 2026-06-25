@@ -33,6 +33,11 @@ const envSchema = z.object({
   OPENAI_REALTIME_TRANSCRIPTION_DELAY: z
     .enum(["minimal", "low", "medium", "high", "xhigh"])
     .default("medium"),
+  /**
+   * OpenAI Realtime 전사 세션을 미리 교체할 주기입니다.
+   * 세션의 최대 지속 시간에 도달하기 전에 새 세션으로 넘겨 끊김을 줄입니다.
+   */
+  OPENAI_REALTIME_SESSION_ROTATION_MS: positiveInteger.default(3300000),
   /** 실시간 번역 기능을 활성화할지 여부입니다. */
   ENABLE_TRANSLATION: booleanString,
 
