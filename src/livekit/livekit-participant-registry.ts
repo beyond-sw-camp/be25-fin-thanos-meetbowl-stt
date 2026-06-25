@@ -10,6 +10,15 @@ export function userIdFromParticipantIdentity(identity: string): string | undefi
   return UUID_PATTERN.test(userId) ? userId.toLowerCase() : undefined;
 }
 
+export interface ParticipantRegistrySyncSummary {
+  roomParticipantCount: number;
+  authenticatedParticipantCount: number;
+  ignoredParticipantCount: number;
+  addedCount: number;
+  removedCount: number;
+  replacedCount: number;
+}
+
 export class LiveKitParticipantRegistry {
   private readonly identityByUserId = new Map<string, string>();
 
@@ -31,6 +40,56 @@ export class LiveKitParticipantRegistry {
 
   snapshotUserIds(): string[] {
     return [...this.identityByUserId.keys()].sort();
+  }
+
+  replace(identities: Iterable<string>): ParticipantRegistrySyncSummary {
+    const nextIdentityByUserId = new Map<string, string>();
+    let roomParticipantCount = 0;
+    let ignoredParticipantCount = 0;
+
+    for (const identity of identities) {
+      roomParticipantCount += 1;
+      const userId = userIdFromParticipantIdentity(identity);
+      if (!userId) {
+        ignoredParticipantCount += 1;
+        continue;
+      }
+      nextIdentityByUserId.set(userId, identity);
+    }
+
+    let addedCount = 0;
+    let replacedCount = 0;
+    for (const [userId, identity] of nextIdentityByUserId) {
+      const previousIdentity = this.identityByUserId.get(userId);
+      if (!previousIdentity) {
+        addedCount += 1;
+        continue;
+      }
+      if (previousIdentity !== identity) {
+        replacedCount += 1;
+      }
+    }
+
+    let removedCount = 0;
+    for (const userId of this.identityByUserId.keys()) {
+      if (!nextIdentityByUserId.has(userId)) {
+        removedCount += 1;
+      }
+    }
+
+    this.identityByUserId.clear();
+    for (const [userId, identity] of nextIdentityByUserId) {
+      this.identityByUserId.set(userId, identity);
+    }
+
+    return {
+      roomParticipantCount,
+      authenticatedParticipantCount: nextIdentityByUserId.size,
+      ignoredParticipantCount,
+      addedCount,
+      removedCount,
+      replacedCount
+    };
   }
 
   identitiesForUserIds(userIds: readonly string[]): string[] {

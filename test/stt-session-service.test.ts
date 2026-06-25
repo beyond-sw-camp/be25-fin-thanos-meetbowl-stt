@@ -137,7 +137,6 @@ test("ensureStarted는 provider 또는 runtime이 unhealthy면 같은 meetingId 
   const first = await service.ensureStarted({
     meetingId: "8ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
     organizationId: "9ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
-    participantUserIds: ["aef5f58f-50b2-4f0b-97bf-42e79d91ac39"],
     roomName: "meeting-8ef5f58f-50b2-4f0b-97bf-42e79d91ac39"
   });
 
@@ -164,7 +163,6 @@ test("ensureStarted는 provider 또는 runtime이 unhealthy면 같은 meetingId 
   const second = await service.ensureStarted({
     meetingId: "8ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
     organizationId: "9ef5f58f-50b2-4f0b-97bf-42e79d91ac39",
-    participantUserIds: ["aef5f58f-50b2-4f0b-97bf-42e79d91ac39"],
     roomName: "meeting-8ef5f58f-50b2-4f0b-97bf-42e79d91ac39"
   });
 
