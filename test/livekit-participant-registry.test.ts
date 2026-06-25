@@ -38,3 +38,45 @@ test("tracks current authenticated users and returns a stable snapshot", () => {
   registry.clear();
   assert.deepEqual(registry.snapshotUserIds(), []);
 });
+
+test("replace rebuilds the registry from current room identities and drops stale users", () => {
+  const registry = new LiveKitParticipantRegistry();
+  registry.add(`user-${USER_A}`);
+
+  const summary = registry.replace([
+    `user-${USER_B}`,
+    "guest-123",
+    "meetbowl-stt-session"
+  ]);
+
+  assert.deepEqual(summary, {
+    roomParticipantCount: 3,
+    authenticatedParticipantCount: 1,
+    ignoredParticipantCount: 2,
+    addedCount: 1,
+    removedCount: 1,
+    replacedCount: 0
+  });
+  assert.deepEqual(registry.snapshotUserIds(), [USER_B]);
+});
+
+test("replace keeps the same snapshot stable across reconnect-style resync", () => {
+  const registry = new LiveKitParticipantRegistry();
+  registry.add(`user-${USER_A}`);
+  registry.add(`user-${USER_B}`);
+
+  const summary = registry.replace([`user-${USER_A}`, `user-${USER_B}`]);
+
+  assert.deepEqual(summary, {
+    roomParticipantCount: 2,
+    authenticatedParticipantCount: 2,
+    ignoredParticipantCount: 0,
+    addedCount: 0,
+    removedCount: 0,
+    replacedCount: 0
+  });
+  assert.deepEqual(registry.identitiesForUserIds([USER_A, USER_B]), [
+    `user-${USER_A}`,
+    `user-${USER_B}`
+  ]);
+});
